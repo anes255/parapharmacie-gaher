@@ -44,10 +44,10 @@ const upload = multer({
     }
 });
 
-// CORS configuration
+// Enhanced CORS configuration - Replace the existing corsOptions in server.js
 const corsOptions = {
     origin: function (origin, callback) {
-        // Allow requests with no origin
+        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
         const allowedOrigins = [
@@ -58,23 +58,36 @@ const corsOptions = {
             'http://127.0.0.1:3001',
             'http://localhost:5173',
             'http://localhost:8080',
+            'http://localhost:4000',
+            'http://localhost:8000',
             
-            // Your GitHub Pages URL
+            // Your actual frontend URL on Render
+            'https://parapharmacie-frontend.onrender.com',
+            
+            // GitHub Pages URLs (backup)
             'https://anes255.github.io',
             'https://anes255.github.io/parapharmacie-frontend',
             
-            // Backup URLs in case of different GitHub Pages configuration
-            'https://anes255.github.io/parapharmacie-frontend/',
+            // Additional Render URLs (in case of different naming)
+            'https://shifa-parapharmacie.onrender.com',
+            'https://pharmacie-gaher-frontend.onrender.com',
         ];
         
         if (allowedOrigins.includes(origin)) {
+            console.log(`CORS: ✅ Allowing known origin ${origin}`);
             callback(null, true);
         } else {
-            console.log(`CORS: Allowing origin ${origin} for development`);
-            callback(null, true);
+            // In development, allow any origin for easier testing
+            if (process.env.NODE_ENV === 'development') {
+                console.log(`CORS: 🔧 Allowing origin ${origin} for development`);
+                callback(null, true);
+            } else {
+                console.log(`CORS: ❌ Blocking origin ${origin}`);
+                callback(new Error('Not allowed by CORS'));
+            }
         }
     },
-    credentials: false,
+    credentials: false, // Set to false for static site hosting
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: [
         'Content-Type', 
@@ -83,10 +96,14 @@ const corsOptions = {
         'Origin',
         'X-Requested-With',
         'Accept',
-        'Cache-Control'
+        'Cache-Control',
+        'Access-Control-Request-Method',
+        'Access-Control-Request-Headers'
     ],
     exposedHeaders: ['x-auth-token'],
-    maxAge: 86400
+    maxAge: 86400, // 24 hours
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 };
 
 app.use(cors(corsOptions));
@@ -511,4 +528,5 @@ app.listen(PORT, () => {
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`);
     console.log(`💚 Server ready to accept connections!`);
+
 });

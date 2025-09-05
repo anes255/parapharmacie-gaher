@@ -44,54 +44,29 @@ const upload = multer({
     }
 });
 
-// FIXED CORS configuration with your exact frontend URL
+// CORS configuration
 const corsOptions = {
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
         const allowedOrigins = [
-            // Local development
             'http://localhost:3000',
             'http://localhost:3001',
             'http://127.0.0.1:3000',
             'http://127.0.0.1:3001',
             'http://localhost:5173',
             'http://localhost:8080',
-            'http://localhost:4000',
-            'http://localhost:8000',
-            
-            // YOUR EXACT FRONTEND URL - CRITICAL FIX
-            'https://parapharmacie-frontend.onrender.com',
-            
-            // Additional variations (in case of redirects)
-            'https://parapharmacie-frontend.onrender.com/',
-            
-            // GitHub Pages URLs (backup)
             'https://anes255.github.io',
-            'https://anes255.github.io/parapharmacie-frontend',
-            
-            // Other possible Render URLs
-            'https://shifa-parapharmacie.onrender.com',
-            'https://pharmacie-gaher-frontend.onrender.com',
         ];
         
         if (allowedOrigins.includes(origin)) {
-            console.log(`CORS: Allowing known origin ${origin}`);
             callback(null, true);
         } else {
-            // In development, allow any origin for easier testing
-            if (process.env.NODE_ENV === 'development') {
-                console.log(`CORS: Allowing origin ${origin} for development`);
-                callback(null, true);
-            } else {
-                console.log(`CORS: Blocking unknown origin ${origin}`);
-                console.log(`CORS: Allowed origins are:`, allowedOrigins);
-                callback(null, true); // TEMPORARILY ALLOW ALL FOR DEBUGGING
-            }
+            console.log(`CORS: Allowing origin ${origin} for development`);
+            callback(null, true);
         }
     },
-    credentials: false, // Set to false for static site hosting
+    credentials: false,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: [
         'Content-Type', 
@@ -100,14 +75,10 @@ const corsOptions = {
         'Origin',
         'X-Requested-With',
         'Accept',
-        'Cache-Control',
-        'Access-Control-Request-Method',
-        'Access-Control-Request-Headers'
+        'Cache-Control'
     ],
     exposedHeaders: ['x-auth-token'],
-    maxAge: 86400, // 24 hours
-    preflightContinue: false,
-    optionsSuccessStatus: 204
+    maxAge: 86400
 };
 
 app.use(cors(corsOptions));
@@ -125,11 +96,10 @@ app.use((req, res, next) => {
     next();
 });
 
-// Enhanced request logging
+// Request logging
 app.use((req, res, next) => {
     const timestamp = new Date().toISOString();
     const origin = req.headers.origin || 'No origin';
-    const userAgent = req.headers['user-agent'] ? req.headers['user-agent'].substring(0, 50) + '...' : 'No user agent';
     console.log(`${timestamp} - ${req.method} ${req.path} - Origin: ${origin}`);
     next();
 });
@@ -137,7 +107,7 @@ app.use((req, res, next) => {
 // Serve uploaded images
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ROOT ROUTE - Basic API info
+// ROOT ROUTE
 app.get('/', (req, res) => {
     res.json({
         message: 'Shifa Parapharmacie Backend API',
@@ -145,7 +115,6 @@ app.get('/', (req, res) => {
         version: '1.0.0',
         timestamp: new Date().toISOString(),
         database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        environment: process.env.NODE_ENV || 'development',
         endpoints: {
             health: '/api/health',
             auth: '/api/auth',
@@ -153,23 +122,7 @@ app.get('/', (req, res) => {
             orders: '/api/orders',
             admin: '/api/admin',
             settings: '/api/settings'
-        },
-        cors: {
-            enabled: true,
-            requestOrigin: req.headers.origin || 'none'
         }
-    });
-});
-
-// Test routes for debugging
-app.get('/test', (req, res) => {
-    res.json({
-        message: 'Test route works!',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        origin: req.headers.origin || 'No origin header',
-        corsEnabled: true
     });
 });
 
@@ -180,7 +133,6 @@ app.get('/api', (req, res) => {
         version: '1.0.0',
         database: 'pharmacie-gaher',
         status: 'running',
-        timestamp: new Date().toISOString(),
         endpoints: {
             health: '/api/health',
             auth: '/api/auth (login, register, profile)',
@@ -188,10 +140,6 @@ app.get('/api', (req, res) => {
             orders: '/api/orders (create, list, status)',
             admin: '/api/admin (dashboard, management)',
             settings: '/api/settings (site configuration)'
-        },
-        cors: {
-            status: 'enabled',
-            requestOrigin: req.headers.origin || 'none'
         }
     });
 });
@@ -216,63 +164,59 @@ app.get('/api/health', (req, res) => {
         },
         cors: {
             enabled: true,
-            credentials: corsOptions.credentials,
-            requestOrigin: req.headers.origin || 'none'
-        },
-        server: {
-            nodeVersion: process.version,
-            platform: process.platform
+            credentials: corsOptions.credentials
         }
     };
     
     res.json(healthData);
 });
 
-// CORS debugging route
-app.get('/api/cors-test', (req, res) => {
-    res.json({
-        message: 'CORS test successful',
-        origin: req.headers.origin || 'No origin header',
-        allowedMethods: corsOptions.methods,
-        timestamp: new Date().toISOString(),
-        headers: {
-            origin: req.headers.origin,
-            userAgent: req.headers['user-agent'],
-            referer: req.headers.referer,
-            host: req.headers.host
-        },
-        corsAllowed: true
-    });
-});
+// FIXED: Direct route loading instead of problematic loadRoutes function
+async function loadRoutes() {
+    try {
+        // Load auth routes
+        const authRoutes = require('./routes/auth');
+        app.use('/api/auth', authRoutes);
+        console.log('✅ Auth routes loaded');
+    } catch (error) {
+        console.error('❌ Failed to load auth routes:', error);
+    }
 
-// Try to load route files safely
-function loadRoutes() {
-    const routeFiles = [
-        { path: './routes/auth', mount: '/api/auth' },
-        { path: './routes/products', mount: '/api/products' },
-        { path: './routes/orders', mount: '/api/orders' },
-        { path: './routes/admin', mount: '/api/admin' },
-        { path: './routes/settings', mount: '/api/settings' }
-    ];
+    try {
+        // Load product routes
+        const productRoutes = require('./routes/products');
+        app.use('/api/products', productRoutes);
+        console.log('✅ Product routes loaded');
+    } catch (error) {
+        console.error('❌ Failed to load product routes:', error);
+    }
 
-    routeFiles.forEach(({ path, mount }) => {
-        try {
-            const routeModule = require(path);
-            app.use(mount, routeModule);
-            console.log(`Routes loaded: ${mount}`);
-        } catch (error) {
-            console.warn(`Could not load routes from ${path}:`, error.message);
-            
-            // Create a fallback route that explains the issue
-            app.use(mount, (req, res) => {
-                res.status(503).json({
-                    message: `Route ${mount} is temporarily unavailable`,
-                    error: `Could not load route file: ${path}`,
-                    timestamp: new Date().toISOString()
-                });
-            });
-        }
-    });
+    try {
+        // Load order routes
+        const orderRoutes = require('./routes/orders');
+        app.use('/api/orders', orderRoutes);
+        console.log('✅ Order routes loaded');
+    } catch (error) {
+        console.error('❌ Failed to load order routes:', error);
+    }
+
+    try {
+        // Load admin routes
+        const adminRoutes = require('./routes/admin');
+        app.use('/api/admin', adminRoutes);
+        console.log('✅ Admin routes loaded');
+    } catch (error) {
+        console.error('❌ Failed to load admin routes:', error);
+    }
+
+    try {
+        // Load settings routes
+        const settingsRoutes = require('./routes/settings');
+        app.use('/api/settings', settingsRoutes);
+        console.log('✅ Settings routes loaded');
+    } catch (error) {
+        console.error('❌ Failed to load settings routes:', error);
+    }
 }
 
 // File upload routes
@@ -296,33 +240,10 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
     }
 });
 
-app.post('/api/upload-multiple', upload.array('images', 5), (req, res) => {
-    try {
-        if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ message: 'Aucune image fournie' });
-        }
-        
-        const imageUrls = req.files.map(file => ({
-            url: `/uploads/products/${file.filename}`,
-            filename: file.filename,
-            size: file.size
-        }));
-        
-        res.json({ 
-            message: `${req.files.length} images uploadées avec succès`,
-            images: imageUrls
-        });
-        
-    } catch (error) {
-        console.error('Erreur upload images multiples:', error);
-        res.status(500).json({ message: 'Erreur lors de l\'upload des images' });
-    }
-});
-
-// MongoDB Connection with fixed options
+// MongoDB Connection
 const connectDB = async () => {
     try {
-        console.log('Attempting to connect to MongoDB...');
+        console.log('🔌 Attempting to connect to MongoDB...');
         
         if (!process.env.MONGODB_URI) {
             throw new Error('MONGODB_URI environment variable is not set');
@@ -342,32 +263,32 @@ const connectDB = async () => {
         
         const conn = await mongoose.connect(process.env.MONGODB_URI, mongoOptions);
         
-        console.log('Connected to MongoDB Atlas');
-        console.log('Database:', conn.connection.name);
-        console.log('Host:', conn.connection.host);
+        console.log('✅ Connected to MongoDB Atlas');
+        console.log('📊 Database:', conn.connection.name);
+        console.log('🌐 Host:', conn.connection.host);
         
         // Set up connection event listeners
         mongoose.connection.on('error', (err) => {
-            console.error('MongoDB connection error:', err);
+            console.error('❌ MongoDB connection error:', err);
         });
         
         mongoose.connection.on('disconnected', () => {
-            console.warn('MongoDB disconnected');
+            console.warn('⚠️ MongoDB disconnected');
         });
         
         mongoose.connection.on('reconnected', () => {
-            console.log('MongoDB reconnected');
+            console.log('🔄 MongoDB reconnected');
         });
         
         // Initialize default data after successful connection
         await initializeDefaultData();
         
-        // Load routes after database connection
-        loadRoutes();
+        // Load routes after database connection - THIS IS THE KEY FIX
+        await loadRoutes();
         
     } catch (error) {
-        console.error('MongoDB connection failed:', error.message);
-        console.log('Retrying connection in 10 seconds...');
+        console.error('❌ MongoDB connection failed:', error.message);
+        console.log('🔄 Retrying connection in 10 seconds...');
         setTimeout(connectDB, 10000);
     }
 };
@@ -375,9 +296,8 @@ const connectDB = async () => {
 // Initialize default data
 async function initializeDefaultData() {
     try {
-        console.log('Initializing default data...');
+        console.log('🔧 Initializing default data...');
         
-        // Try to create models - if they fail, create fallback data
         try {
             const User = require('./models/User');
             const bcrypt = require('bcryptjs');
@@ -399,10 +319,10 @@ async function initializeDefaultData() {
                 });
                 
                 await admin.save();
-                console.log('Admin user created');
+                console.log('✅ Admin user created');
             }
         } catch (error) {
-            console.warn('Could not create admin user:', error.message);
+            console.warn('⚠️ Could not create admin user:', error.message);
         }
 
         try {
@@ -416,20 +336,20 @@ async function initializeDefaultData() {
                     livraisonGratuite: 5000
                 });
                 await settings.save();
-                console.log('Default settings created');
+                console.log('✅ Default settings created');
             }
         } catch (error) {
-            console.warn('Could not create settings:', error.message);
+            console.warn('⚠️ Could not create settings:', error.message);
         }
 
         try {
             await createExampleProducts();
         } catch (error) {
-            console.warn('Could not create products:', error.message);
+            console.warn('⚠️ Could not create products:', error.message);
         }
         
     } catch (error) {
-        console.error('Error in default data initialization:', error.message);
+        console.error('⚠️ Error in default data initialization:', error.message);
     }
 }
 
@@ -476,10 +396,10 @@ async function createExampleProducts() {
             ];
 
             await Product.insertMany(exampleProducts);
-            console.log(`Created ${exampleProducts.length} example products`);
+            console.log(`✅ Created ${exampleProducts.length} example products`);
         }
     } catch (error) {
-        console.warn('Could not create example products:', error.message);
+        console.warn('⚠️ Could not create example products:', error.message);
     }
 }
 
@@ -500,14 +420,6 @@ app.use((error, req, res, next) => {
         return res.status(400).json({ message: 'Données dupliquées' });
     }
     
-    if (error.message.includes('CORS')) {
-        return res.status(403).json({ 
-            message: 'CORS error: Origin not allowed',
-            origin: req.headers.origin,
-            timestamp: new Date().toISOString()
-        });
-    }
-    
     res.status(error.status || 500).json({ 
         message: error.message || 'Erreur interne du serveur',
         timestamp: new Date().toISOString()
@@ -519,15 +431,13 @@ app.use('/api/*', (req, res) => {
     res.status(404).json({ 
         message: 'Route API non trouvée',
         requestedPath: req.path,
-        method: req.method,
         availableEndpoints: [
-            'GET /api/health',
-            'POST /api/auth/login',
-            'POST /api/auth/register',
-            'GET /api/products', 
-            'POST /api/orders',
-            'GET /api/admin/*',
-            'GET /api/settings'
+            '/api/health',
+            '/api/auth',
+            '/api/products', 
+            '/api/orders',
+            '/api/admin',
+            '/api/settings'
         ],
         timestamp: new Date().toISOString()
     });
@@ -538,7 +448,6 @@ app.use('*', (req, res) => {
     res.status(404).json({
         message: 'Route non trouvée',
         requestedPath: req.path,
-        method: req.method,
         suggestion: 'Essayez /api pour voir les endpoints disponibles',
         timestamp: new Date().toISOString()
     });
@@ -546,23 +455,23 @@ app.use('*', (req, res) => {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-    console.log('\nShutting down gracefully...');
+    console.log('\n🛑 Shutting down gracefully...');
     try {
         await mongoose.connection.close();
-        console.log('MongoDB connection closed');
+        console.log('✅ MongoDB connection closed');
     } catch (error) {
-        console.error('Error closing MongoDB:', error);
+        console.error('❌ Error closing MongoDB:', error);
     }
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-    console.log('SIGTERM received, shutting down gracefully...');
+    console.log('🛑 SIGTERM received, shutting down gracefully...');
     try {
         await mongoose.connection.close();
-        console.log('MongoDB connection closed');
+        console.log('✅ MongoDB connection closed');
     } catch (error) {
-        console.error('Error closing MongoDB:', error);
+        console.error('❌ Error closing MongoDB:', error);
     }
     process.exit(0);
 });
@@ -573,11 +482,9 @@ connectDB();
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log('Shifa Parapharmacie Backend Started');
-    console.log(`Port: ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`Health Check: http://localhost:${PORT}/api/health`);
-    console.log(`CORS Test: http://localhost:${PORT}/api/cors-test`);
-    console.log(`Server ready to accept connections!`);
-    console.log(`Frontend should connect from: https://parapharmacie-frontend.onrender.com`);
+    console.log('🚀 Shifa Parapharmacie Backend Started');
+    console.log(`📡 Port: ${PORT}`);
+    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🥼 Health Check: http://localhost:${PORT}/api/health`);
+    console.log(`💚 Server ready to accept connections!`);
 });

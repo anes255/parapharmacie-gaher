@@ -4,6 +4,8 @@ const cors = require('cors');
 const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
@@ -171,51 +173,268 @@ app.get('/api/health', (req, res) => {
     res.json(healthData);
 });
 
-// FIXED: Direct route loading instead of problematic loadRoutes function
-async function loadRoutes() {
-    try {
-        // Load auth routes
-        const authRoutes = require('./routes/auth');
-        app.use('/api/auth', authRoutes);
-        console.log('✅ Auth routes loaded');
-    } catch (error) {
-        console.error('❌ Failed to load auth routes:', error);
+// EMBEDDED AUTH ROUTES - THIS FIXES THE PROBLEM
+// Middleware d'authentification
+const auth = (req, res, next) => {
+    const token = req.header('x-auth-token');
+
+    if (!token) {
+        return res.status(401).json({ message: 'Accès refusé - Token manquant' });
     }
 
     try {
-        // Load product routes
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded.user;
+        next();
+    } catch (error) {
+        console.error('Erreur vérification token:', error);
+        res.status(401).json({ message: 'Token invalide' });
+    }
+};
+
+// Inscription
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const User = require('./models/User');
+        const { nom, prenom, email, telephone, adresse, wilaya, password } = req.body;
+
+        console.log('Tentative d\'inscription:', email);
+
+        // Validation des données
+        if (!nom || !prenom || !email || !password) {
+            return res.status(400).json({ message: 'Tous les champs requis doivent être remplis' });
+        }
+
+        // Vérifier si l'utilisateur existe déjà   
+        let user = await User.findOne({ email: email.toLowerCase() });
+        if (user) {
+            return res.status(400).json({ message: 'Un utilisateur avec cet email existe déjà' });
+        }
+
+        // Hashage du mot de passe
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Créer l'utilisateur
+        user = new User({
+            nom,
+            prenom,
+            email: email.toLowerCase(),
+            telephone,
+            adresse,
+            wilaya,
+            password: hashedPassword
+        });
+
+        await user.save();
+        console.log('Utilisateur créé:', user.email, 'Role:', user.role);
+
+        // Créer le token JWT
+        const payload = {
+            user: {
+                id: user.id,
+                role: user.role
+            }
+        };
+
+        jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
+            if (err) throw err;
+            res.json({
+                token,
+                user: {
+                    id: user.id,
+                    nom: user.nom,
+                    prenom: user.prenom,
+                    email: user.email,
+                    telephone: user.telephone,
+                    adresse: user.adresse,
+                    wilaya: user.wilaya,
+                    role: user.role
+                }
+            });
+        });
+
+    } catch (error) {
+        console.error('Erreur inscription:', error);
+        res.status(500).json({ message: 'Erreur serveur lors de l\'inscription' });
+    }
+});
+
+// Connexion
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const User = require('./models/User');
+        console.log('Tentative de connexion pour:', req.body.email);
+        const { email, password } = req.body;
+
+        // Validation des données
+        if (!email || !password) {
+            console.log('Email ou mot de passe manquant');
+            return res.status(400).json({ message: 'Email et mot de passe requis' });
+        }
+
+        console.log('Recherche de l\'utilisateur:', email.toLowerCase());
+
+        // Vérifier si l'utilisateur existe - INCLURE LE MOT DE PASSE
+        let user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+        if (!user) {
+            console.log('Utilisateur non trouvé:', email);
+            return res.status(400).json({ message: 'Email ou mot de passe incorrect' });
+        }
+
+        console.log('Utilisateur trouvé:', user.email);
+        console.log('Rôle:', user.role);
+        console.log('Password hash présent:', !!user.password);
+
+        // Vérifier que le mot de passe existe
+        if (!user.password) {
+            console.log('Mot de passe manquant dans la base de données pour:', email);
+            return res.status(500).json({ message: 'Erreur de configuration du compte. Veuillez contacter l\'administrateur.' });
+        }
+
+        // Vérifier le mot de passe
+        console.log('Vérification du mot de passe...');
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            console.log('Mot de passe incorrect pour:', email);
+            return res.status(400).json({ message: 'Email ou mot de passe incorrect' });
+        }
+
+        console.log('Authentification réussie pour:', user.email, 'Role:', user.role);
+
+        // Vérifier que JWT_SECRET existe
+        if (!process.env.JWT_SECRET) {
+            console.error('JWT_SECRET non défini');
+            return res.status(500).json({ message: 'Configuration serveur incorrecte' });
+        }
+
+        // Créer le token JWT
+        const payload = {
+            user: {
+                id: user.id,
+                role: user.role
+            }
+        };
+
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
+        
+        console.log('Token créé avec succès pour:', user.email);
+
+        res.json({
+            token,
+            user: {
+                id: user.id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                wilaya: user.wilaya,
+                role: user.role
+            }
+        });
+
+    } catch (error) {
+        console.error('Erreur connexion détaillée:', error);
+        res.status(500).json({ 
+            message: 'Erreur serveur lors de la connexion',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Profil utilisateur
+app.get('/api/auth/profile', auth, async (req, res) => {
+    try {
+        const User = require('./models/User');
+        const user = await User.findById(req.user.id).select('-password');
+        if (!user) {
+            return res.status(404).json({ message: 'Utilisateur non trouvé' });
+        }
+        res.json(user);
+    } catch (error) {
+        console.error('Erreur récupération profil:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// Mettre à jour le profil
+app.put('/api/auth/profile', auth, async (req, res) => {
+    try {
+        const User = require('./models/User');
+        const { nom, prenom, telephone, adresse, wilaya } = req.body;
+        
+        const user = await User.findByIdAndUpdate(
+            req.user.id,
+            { nom, prenom, telephone, adresse, wilaya },
+            { new: true }
+        ).select('-password');
+
+        if (!user) {
+            return res.status(404).json({ message: 'Utilisateur non trouvé' });
+        }
+
+        res.json(user);
+    } catch (error) {
+        console.error('Erreur mise à jour profil:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// Route de test pour vérifier l'état des utilisateurs
+app.get('/api/auth/test-users', async (req, res) => {
+    try {
+        const User = require('./models/User');
+        const users = await User.find({}).select('+password');
+        const userInfo = users.map(user => ({
+            email: user.email,
+            role: user.role,
+            hasPassword: !!user.password,
+            passwordLength: user.password ? user.password.length : 0
+        }));
+        
+        res.json({
+            message: 'État des utilisateurs',
+            users: userInfo,
+            totalUsers: users.length
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Erreur lors de la récupération des utilisateurs' });
+    }
+});
+
+// Load other routes safely
+async function loadOtherRoutes() {
+    try {
         const productRoutes = require('./routes/products');
         app.use('/api/products', productRoutes);
-        console.log('✅ Product routes loaded');
+        console.log('Product routes loaded');
     } catch (error) {
-        console.error('❌ Failed to load product routes:', error);
+        console.warn('Could not load product routes:', error.message);
     }
 
     try {
-        // Load order routes
         const orderRoutes = require('./routes/orders');
         app.use('/api/orders', orderRoutes);
-        console.log('✅ Order routes loaded');
+        console.log('Order routes loaded');
     } catch (error) {
-        console.error('❌ Failed to load order routes:', error);
+        console.warn('Could not load order routes:', error.message);
     }
 
     try {
-        // Load admin routes
         const adminRoutes = require('./routes/admin');
         app.use('/api/admin', adminRoutes);
-        console.log('✅ Admin routes loaded');
+        console.log('Admin routes loaded');
     } catch (error) {
-        console.error('❌ Failed to load admin routes:', error);
+        console.warn('Could not load admin routes:', error.message);
     }
 
     try {
-        // Load settings routes
         const settingsRoutes = require('./routes/settings');
         app.use('/api/settings', settingsRoutes);
-        console.log('✅ Settings routes loaded');
+        console.log('Settings routes loaded');
     } catch (error) {
-        console.error('❌ Failed to load settings routes:', error);
+        console.warn('Could not load settings routes:', error.message);
     }
 }
 
@@ -243,7 +462,7 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
 // MongoDB Connection
 const connectDB = async () => {
     try {
-        console.log('🔌 Attempting to connect to MongoDB...');
+        console.log('Attempting to connect to MongoDB...');
         
         if (!process.env.MONGODB_URI) {
             throw new Error('MONGODB_URI environment variable is not set');
@@ -263,32 +482,28 @@ const connectDB = async () => {
         
         const conn = await mongoose.connect(process.env.MONGODB_URI, mongoOptions);
         
-        console.log('✅ Connected to MongoDB Atlas');
-        console.log('📊 Database:', conn.connection.name);
-        console.log('🌐 Host:', conn.connection.host);
+        console.log('Connected to MongoDB Atlas');
+        console.log('Database:', conn.connection.name);
+        console.log('Host:', conn.connection.host);
         
-        // Set up connection event listeners
         mongoose.connection.on('error', (err) => {
-            console.error('❌ MongoDB connection error:', err);
+            console.error('MongoDB connection error:', err);
         });
         
         mongoose.connection.on('disconnected', () => {
-            console.warn('⚠️ MongoDB disconnected');
+            console.warn('MongoDB disconnected');
         });
         
         mongoose.connection.on('reconnected', () => {
-            console.log('🔄 MongoDB reconnected');
+            console.log('MongoDB reconnected');
         });
         
-        // Initialize default data after successful connection
         await initializeDefaultData();
-        
-        // Load routes after database connection - THIS IS THE KEY FIX
-        await loadRoutes();
+        await loadOtherRoutes();
         
     } catch (error) {
-        console.error('❌ MongoDB connection failed:', error.message);
-        console.log('🔄 Retrying connection in 10 seconds...');
+        console.error('MongoDB connection failed:', error.message);
+        console.log('Retrying connection in 10 seconds...');
         setTimeout(connectDB, 10000);
     }
 };
@@ -296,11 +511,10 @@ const connectDB = async () => {
 // Initialize default data
 async function initializeDefaultData() {
     try {
-        console.log('🔧 Initializing default data...');
+        console.log('Initializing default data...');
         
         try {
             const User = require('./models/User');
-            const bcrypt = require('bcryptjs');
             
             let admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
             if (!admin) {
@@ -319,10 +533,10 @@ async function initializeDefaultData() {
                 });
                 
                 await admin.save();
-                console.log('✅ Admin user created');
+                console.log('Admin user created');
             }
         } catch (error) {
-            console.warn('⚠️ Could not create admin user:', error.message);
+            console.warn('Could not create admin user:', error.message);
         }
 
         try {
@@ -336,20 +550,20 @@ async function initializeDefaultData() {
                     livraisonGratuite: 5000
                 });
                 await settings.save();
-                console.log('✅ Default settings created');
+                console.log('Default settings created');
             }
         } catch (error) {
-            console.warn('⚠️ Could not create settings:', error.message);
+            console.warn('Could not create settings:', error.message);
         }
 
         try {
             await createExampleProducts();
         } catch (error) {
-            console.warn('⚠️ Could not create products:', error.message);
+            console.warn('Could not create products:', error.message);
         }
         
     } catch (error) {
-        console.error('⚠️ Error in default data initialization:', error.message);
+        console.error('Error in default data initialization:', error.message);
     }
 }
 
@@ -396,10 +610,10 @@ async function createExampleProducts() {
             ];
 
             await Product.insertMany(exampleProducts);
-            console.log(`✅ Created ${exampleProducts.length} example products`);
+            console.log(`Created ${exampleProducts.length} example products`);
         }
     } catch (error) {
-        console.warn('⚠️ Could not create example products:', error.message);
+        console.warn('Could not create example products:', error.message);
     }
 }
 
@@ -455,23 +669,23 @@ app.use('*', (req, res) => {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-    console.log('\n🛑 Shutting down gracefully...');
+    console.log('\nShutting down gracefully...');
     try {
         await mongoose.connection.close();
-        console.log('✅ MongoDB connection closed');
+        console.log('MongoDB connection closed');
     } catch (error) {
-        console.error('❌ Error closing MongoDB:', error);
+        console.error('Error closing MongoDB:', error);
     }
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-    console.log('🛑 SIGTERM received, shutting down gracefully...');
+    console.log('SIGTERM received, shutting down gracefully...');
     try {
         await mongoose.connection.close();
-        console.log('✅ MongoDB connection closed');
+        console.log('MongoDB connection closed');
     } catch (error) {
-        console.error('❌ Error closing MongoDB:', error);
+        console.error('Error closing MongoDB:', error);
     }
     process.exit(0);
 });
@@ -482,9 +696,10 @@ connectDB();
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log('🚀 Shifa Parapharmacie Backend Started');
-    console.log(`📡 Port: ${PORT}`);
-    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🥼 Health Check: http://localhost:${PORT}/api/health`);
-    console.log(`💚 Server ready to accept connections!`);
+    console.log('Shifa Parapharmacie Backend Started');
+    console.log(`Port: ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Health Check: http://localhost:${PORT}/api/health`);
+    console.log(`Auth endpoints: /api/auth/login, /api/auth/register`);
+    console.log('Server ready to accept connections!');
 });

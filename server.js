@@ -60,7 +60,8 @@ const corsOptions = {
             'http://localhost:8080',
             
             // Your ACTUAL production frontend URL - CRITICAL FIX
-            'https://maman-algerienne.onrender.com',
+            'https://parapharmacieshifa.com',
+            'http://parapharmacieshifa.com',
             
             // Keep legacy URLs for compatibility
             'https://anes255.github.io',

@@ -191,34 +191,48 @@ app.get('/api/health', (req, res) => {
     res.json(healthData);
 });
 
-// Try to load route files safely
+// Load route files - SIMPLIFIED AND FIXED
 function loadRoutes() {
-    const routeFiles = [
-        { path: './routes/auth', mount: '/api/auth' },
-        { path: './routes/products', mount: '/api/products' },
-        { path: './routes/orders', mount: '/api/orders' },
-        { path: './routes/admin', mount: '/api/admin' },
-        { path: './routes/settings', mount: '/api/settings' }
-    ];
+    try {
+        // Load each route file individually
+        const authRoutes = require('./routes/auth');
+        app.use('/api/auth', authRoutes);
+        console.log('✅ Loaded routes: /api/auth');
+    } catch (error) {
+        console.error('❌ Failed to load auth routes:', error.message);
+    }
 
-    routeFiles.forEach(({ path, mount }) => {
-        try {
-            const routeModule = require(path);
-            app.use(mount, routeModule);
-            console.log(`✅ Loaded routes: ${mount}`);
-        } catch (error) {
-            console.warn(`⚠️ Could not load routes from ${path}:`, error.message);
-            
-            // Create a fallback route that explains the issue
-            app.use(mount, (req, res) => {
-                res.status(503).json({
-                    message: `Route ${mount} is temporarily unavailable`,
-                    error: `Could not load route file: ${path}`,
-                    timestamp: new Date().toISOString()
-                });
-            });
-        }
-    });
+    try {
+        const productRoutes = require('./routes/products');
+        app.use('/api/products', productRoutes);
+        console.log('✅ Loaded routes: /api/products');
+    } catch (error) {
+        console.error('❌ Failed to load product routes:', error.message);
+    }
+
+    try {
+        const orderRoutes = require('./routes/orders');
+        app.use('/api/orders', orderRoutes);
+        console.log('✅ Loaded routes: /api/orders');
+    } catch (error) {
+        console.error('❌ Failed to load order routes:', error.message);
+    }
+
+    try {
+        const adminRoutes = require('./routes/admin');
+        app.use('/api/admin', adminRoutes);
+        console.log('✅ Loaded routes: /api/admin');
+    } catch (error) {
+        console.error('❌ Failed to load admin routes:', error.message);
+    }
+
+    try {
+        const settingsRoutes = require('./routes/settings');
+        app.use('/api/settings', settingsRoutes);
+        console.log('✅ Loaded routes: /api/settings');
+    } catch (error) {
+        console.error('❌ Failed to load settings routes:', error.message);
+    }
 }
 
 // File upload routes

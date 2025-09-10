@@ -23,17 +23,16 @@ const ProductSchema = new mongoose.Schema({
         type: String,
         required: true,
         enum: [
-            'Cheveux',
-            'Intime', 
-            'Solaire',
-            'Maman',
-            'Bébé',
+            'Vitalité',
+            'Sport', 
             'Visage',
-            'Minceur',
-            'Homme',
+            'Cheveux',
+            'Solaire',
+            'Intime',
             'Soins',
-            'Dentaire',
-            'Vitalité'
+            'Bébé',
+            'Homme',
+            'Dentaire'
         ]
     },
     sousCategorie: {

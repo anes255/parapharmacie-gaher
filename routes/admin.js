@@ -127,72 +127,153 @@ router.get('/products', adminAuth, async (req, res) => {
     }
 });
 
-// Ajouter un produit - ENHANCED ERROR HANDLING
+// Replace the POST /products route in your routes/admin.js with this enhanced version:
+
+// Ajouter un produit - ENHANCED DEBUG VERSION
 router.post('/products', adminAuth, async (req, res) => {
     try {
-        console.log('Creating product with data:', JSON.stringify(req.body, null, 2));
+        console.log('🔥 === PRODUCT CREATION DEBUG ===');
+        console.log('📥 Raw request body:', JSON.stringify(req.body, null, 2));
+        console.log('📝 Request headers:', req.headers);
+        console.log('👤 User from token:', req.user);
+        
+        // Log each field individually
+        console.log('📋 Field Analysis:');
+        console.log('  - nom:', req.body.nom, '(type:', typeof req.body.nom, ')');
+        console.log('  - description:', req.body.description, '(type:', typeof req.body.description, ')');
+        console.log('  - prix:', req.body.prix, '(type:', typeof req.body.prix, ')');
+        console.log('  - stock:', req.body.stock, '(type:', typeof req.body.stock, ')');
+        console.log('  - categorie:', req.body.categorie, '(type:', typeof req.body.categorie, ')');
+        console.log('  - _id field present:', !!req.body._id);
         
         // Validation of required fields
         const requiredFields = ['nom', 'description', 'prix', 'stock', 'categorie'];
+        const missingFields = [];
+        
         for (const field of requiredFields) {
             if (!req.body[field] && req.body[field] !== 0) {
-                console.error(`Missing required field: ${field}`);
-                return res.status(400).json({ 
-                    message: `Le champ ${field} est requis`,
-                    field: field
-                });
+                missingFields.push(field);
+                console.error(`❌ Missing required field: ${field}`);
             }
+        }
+        
+        if (missingFields.length > 0) {
+            return res.status(400).json({ 
+                message: `Champs requis manquants: ${missingFields.join(', ')}`,
+                missingFields: missingFields,
+                receivedData: req.body
+            });
         }
         
         // Validate category
         const validCategories = ['Vitalité', 'Sport', 'Visage', 'Cheveux', 'Solaire', 'Intime', 'Soins', 'Bébé', 'Homme', 'Dentaire'];
         if (!validCategories.includes(req.body.categorie)) {
-            console.error(`Invalid category: ${req.body.categorie}`);
+            console.error(`❌ Invalid category: ${req.body.categorie}`);
             return res.status(400).json({ 
-                message: `Catégorie invalide. Catégories valides: ${validCategories.join(', ')}`,
+                message: `Catégorie invalide: "${req.body.categorie}". Catégories valides: ${validCategories.join(', ')}`,
                 receivedCategory: req.body.categorie,
                 validCategories: validCategories
             });
         }
         
-        // Ensure numeric fields are properly typed
-        const productData = {
-            ...req.body,
-            prix: Number(req.body.prix),
-            stock: Number(req.body.stock),
-            prixOriginal: req.body.prixOriginal ? Number(req.body.prixOriginal) : null,
-            pourcentagePromotion: req.body.pourcentagePromotion ? Number(req.body.pourcentagePromotion) : 0
-        };
+        // Remove _id if present (let MongoDB generate it)
+        const productData = { ...req.body };
+        if (productData._id) {
+            console.log('⚠️ Removing _id field from request data');
+            delete productData._id;
+        }
         
-        console.log('Processed product data:', JSON.stringify(productData, null, 2));
+        // Ensure numeric fields are properly typed
+        productData.prix = Number(req.body.prix);
+        productData.stock = Number(req.body.stock);
+        
+        if (req.body.prixOriginal) {
+            productData.prixOriginal = Number(req.body.prixOriginal);
+        }
+        
+        if (req.body.pourcentagePromotion) {
+            productData.pourcentagePromotion = Number(req.body.pourcentagePromotion);
+        }
+        
+        // Ensure boolean fields are properly typed
+        productData.actif = Boolean(req.body.actif);
+        productData.enVedette = Boolean(req.body.enVedette);
+        productData.enPromotion = Boolean(req.body.enPromotion);
+        
+        console.log('🔧 Processed product data:', JSON.stringify(productData, null, 2));
+        
+        // Validate processed data
+        if (isNaN(productData.prix) || productData.prix < 0) {
+            return res.status(400).json({ 
+                message: 'Prix invalide',
+                receivedPrix: req.body.prix,
+                processedPrix: productData.prix
+            });
+        }
+        
+        if (isNaN(productData.stock) || productData.stock < 0) {
+            return res.status(400).json({ 
+                message: 'Stock invalide',
+                receivedStock: req.body.stock,
+                processedStock: productData.stock
+            });
+        }
+        
+        console.log('✅ Data validation passed, creating product...');
         
         const product = new Product(productData);
+        
+        console.log('📦 Product object created, attempting to save...');
+        
         await product.save();
         
-        console.log('Product saved successfully:', product._id);
+        console.log('🎉 Product saved successfully!');
+        console.log('📄 Saved product:', JSON.stringify(product.toObject(), null, 2));
         
         res.status(201).json({ 
             message: 'Produit ajouté avec succès', 
-            product: product
+            product: product.toObject()
         });
         
     } catch (error) {
-        console.error('Erreur ajout produit détaillée:', error);
+        console.error('💥 === PRODUCT CREATION ERROR ===');
+        console.error('Error name:', error.name);
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
         
         if (error.name === 'ValidationError') {
-            const errors = Object.keys(error.errors).map(key => ({
-                field: key,
-                message: error.errors[key].message
-            }));
+            console.error('📋 Validation errors:');
+            const errors = Object.keys(error.errors).map(key => {
+                const err = error.errors[key];
+                console.error(`  - ${key}: ${err.message} (kind: ${err.kind}, value: ${err.value})`);
+                return {
+                    field: key,
+                    message: err.message,
+                    kind: err.kind,
+                    value: err.value
+                };
+            });
+            
             return res.status(400).json({ 
-                message: 'Erreur de validation',
-                errors: errors
+                message: 'Erreur de validation détaillée',
+                validationErrors: errors,
+                receivedData: req.body
+            });
+        }
+        
+        if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+            console.error('🗄️ MongoDB Error:', error.code, error.codeName);
+            return res.status(400).json({
+                message: 'Erreur base de données',
+                mongoError: error.message,
+                code: error.code
             });
         }
         
         res.status(500).json({ 
             message: 'Erreur serveur lors de l\'ajout du produit',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            errorType: error.name,
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
         });
     }
 });
@@ -355,3 +436,4 @@ router.put('/orders/:id/status', adminAuth, async (req, res) => {
 });
 
 module.exports = router;
+

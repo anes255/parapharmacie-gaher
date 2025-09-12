@@ -5,10 +5,10 @@ const { auth, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// POST /api/orders - Create new order
+// POST /api/orders - Create new order (Fixed for cross-device visibility)
 router.post('/', optionalAuth, async (req, res) => {
     try {
-        console.log('Creating new order:', req.body);
+        console.log('📦 Creating new order:', JSON.stringify(req.body, null, 2));
         
         const {
             client,
@@ -20,130 +20,235 @@ router.post('/', optionalAuth, async (req, res) => {
             commentaires
         } = req.body;
         
-        // Validation
+        // Enhanced validation
         if (!client || !articles || !Array.isArray(articles) || articles.length === 0) {
-            return res.status(400).json({ message: 'Informations client et articles requis' });
+            console.error('❌ Missing client or articles');
+            return res.status(400).json({ 
+                message: 'Informations client et articles requis',
+                details: { client: !!client, articles: articles?.length || 0 }
+            });
         }
         
-        if (!client.nom || !client.prenom || !client.email || !client.telephone || !client.adresse || !client.wilaya) {
-            return res.status(400).json({ message: 'Informations client incomplètes' });
+        // Validate client information
+        const requiredClientFields = ['nom', 'prenom', 'email', 'telephone', 'adresse', 'wilaya'];
+        for (const field of requiredClientFields) {
+            if (!client[field] || client[field].trim() === '') {
+                console.error(`❌ Missing client field: ${field}`);
+                return res.status(400).json({ 
+                    message: `Champ client requis: ${field}` 
+                });
+            }
         }
         
-        if (sousTotal === undefined || fraisLivraison === undefined || total === undefined) {
-            return res.status(400).json({ message: 'Informations de prix manquantes' });
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(client.email)) {
+            return res.status(400).json({ message: 'Format email invalide' });
         }
         
-        // Validate articles and check stock
+        // Validate phone format (Algerian numbers)
+        const phoneRegex = /^(\+213|0)[0-9]{9}$/;
+        if (!phoneRegex.test(client.telephone.replace(/\s/g, ''))) {
+            return res.status(400).json({ message: 'Format téléphone invalide' });
+        }
+        
+        // Validate totals
+        if (typeof sousTotal !== 'number' || typeof fraisLivraison !== 'number' || typeof total !== 'number') {
+            console.error('❌ Invalid pricing data');
+            return res.status(400).json({ message: 'Données de prix invalides' });
+        }
+        
+        // Validate and process articles
         const validatedArticles = [];
         let calculatedSubtotal = 0;
         
-        for (const article of articles) {
-            if (!article.id || !article.nom || !article.prix || !article.quantite) {
-                return res.status(400).json({ message: 'Article invalide dans la commande' });
-            }
+        for (let i = 0; i < articles.length; i++) {
+            const article = articles[i];
+            console.log(`🔍 Validating article ${i + 1}:`, article);
             
-            // Check if product exists and has enough stock
-            const product = await Product.findById(article.id);
-            if (!product) {
-                return res.status(400).json({ message: `Produit non trouvé: ${article.nom}` });
-            }
-            
-            if (!product.actif) {
-                return res.status(400).json({ message: `Produit non disponible: ${article.nom}` });
-            }
-            
-            if (product.stock < article.quantite) {
+            if (!article.id || !article.nom || typeof article.prix !== 'number' || typeof article.quantite !== 'number') {
+                console.error(`❌ Invalid article at index ${i}:`, article);
                 return res.status(400).json({ 
-                    message: `Stock insuffisant pour ${article.nom}. Stock disponible: ${product.stock}` 
+                    message: `Article invalide à la position ${i + 1}`,
+                    article: article
                 });
             }
             
-            // Add validated article
+            if (article.quantite <= 0) {
+                return res.status(400).json({ 
+                    message: `Quantité invalide pour ${article.nom}` 
+                });
+            }
+            
+            // Try to find and validate product (optional - don't fail if product not found)
+            let product = null;
+            try {
+                product = await Product.findById(article.id);
+                if (product) {
+                    console.log(`✅ Found product: ${product.nom}`);
+                    
+                    if (!product.actif) {
+                        return res.status(400).json({ 
+                            message: `Produit non disponible: ${article.nom}` 
+                        });
+                    }
+                    
+                    if (product.stock < article.quantite) {
+                        return res.status(400).json({ 
+                            message: `Stock insuffisant pour ${article.nom}. Stock disponible: ${product.stock}` 
+                        });
+                    }
+                }
+            } catch (error) {
+                console.warn(`⚠️ Could not find product ${article.id}, continuing anyway`);
+            }
+            
+            // Create validated article
             const validatedArticle = {
-                productId: product._id,
+                productId: article.id,
                 nom: article.nom,
                 prix: article.prix,
                 quantite: article.quantite,
-                image: article.image || product.image || '',
-                categorie: product.categorie
+                image: article.image || '',
+                categorie: article.categorie || (product ? product.categorie : '')
             };
             
             validatedArticles.push(validatedArticle);
             calculatedSubtotal += article.prix * article.quantite;
         }
         
-        // Validate totals
-        if (Math.abs(calculatedSubtotal - sousTotal) > 1) {
-            return res.status(400).json({ message: 'Erreur de calcul du sous-total' });
+        // Validate calculated totals (allow small rounding differences)
+        if (Math.abs(calculatedSubtotal - sousTotal) > 5) {
+            console.error(`❌ Subtotal mismatch: calculated=${calculatedSubtotal}, provided=${sousTotal}`);
+            return res.status(400).json({ 
+                message: 'Erreur de calcul du sous-total',
+                calculated: calculatedSubtotal,
+                provided: sousTotal
+            });
         }
         
-        if (Math.abs((calculatedSubtotal + fraisLivraison) - total) > 1) {
-            return res.status(400).json({ message: 'Erreur de calcul du total' });
+        const expectedTotal = calculatedSubtotal + fraisLivraison;
+        if (Math.abs(expectedTotal - total) > 5) {
+            console.error(`❌ Total mismatch: expected=${expectedTotal}, provided=${total}`);
+            return res.status(400).json({ 
+                message: 'Erreur de calcul du total',
+                expected: expectedTotal,
+                provided: total
+            });
         }
         
-        // Generate order number
+        // Generate unique order number
         const numeroCommande = await Order.generateOrderNumber();
+        console.log(`🏷️ Generated order number: ${numeroCommande}`);
         
         // Create order
-        const order = new Order({
+        const orderData = {
             numeroCommande,
             utilisateur: req.user ? req.user._id : null,
             client: {
                 nom: client.nom.trim(),
                 prenom: client.prenom.trim(),
                 email: client.email.toLowerCase().trim(),
-                telephone: client.telephone.trim(),
+                telephone: client.telephone.replace(/\s/g, '').trim(),
                 adresse: client.adresse.trim(),
                 wilaya: client.wilaya,
                 codePostal: client.codePostal ? client.codePostal.trim() : ''
             },
             articles: validatedArticles,
-            sousTotal: Math.round(sousTotal),
+            sousTotal: Math.round(calculatedSubtotal),
             fraisLivraison: Math.round(fraisLivraison),
-            total: Math.round(total),
+            total: Math.round(calculatedSubtotal + fraisLivraison),
             modePaiement: modePaiement || 'paiement-livraison',
             commentaires: commentaires ? commentaires.trim() : '',
             statut: 'en-attente',
             dateCommande: new Date(),
             createdBy: req.user ? 'user' : 'guest'
+        };
+        
+        console.log('💾 Creating order in database:', {
+            numeroCommande: orderData.numeroCommande,
+            client: orderData.client.email,
+            articles: orderData.articles.length,
+            total: orderData.total
         });
         
+        const order = new Order(orderData);
         await order.save();
         
-        // Update product stock
+        console.log(`✅ Order saved to database with ID: ${order._id}`);
+        
+        // Update product stock if products were found
+        const stockUpdates = [];
         for (const article of validatedArticles) {
-            await Product.findByIdAndUpdate(
-                article.productId,
-                { $inc: { stock: -article.quantite } }
-            );
+            try {
+                const updateResult = await Product.findByIdAndUpdate(
+                    article.productId,
+                    { $inc: { stock: -article.quantite } },
+                    { new: true }
+                );
+                
+                if (updateResult) {
+                    stockUpdates.push({
+                        productId: article.productId,
+                        nom: article.nom,
+                        newStock: updateResult.stock
+                    });
+                    console.log(`📦 Updated stock for ${article.nom}: ${updateResult.stock}`);
+                }
+            } catch (error) {
+                console.warn(`⚠️ Could not update stock for product ${article.productId}:`, error.message);
+            }
         }
         
-        console.log(`Order created successfully: ${order.numeroCommande}`);
-        
-        res.status(201).json({
+        // Return success response
+        const response = {
+            success: true,
             message: 'Commande créée avec succès',
             order: {
                 _id: order._id,
                 numeroCommande: order.numeroCommande,
                 total: order.total,
                 statut: order.statut,
-                dateCommande: order.dateCommande
-            }
-        });
+                dateCommande: order.dateCommande,
+                client: {
+                    nom: order.client.nom,
+                    prenom: order.client.prenom,
+                    email: order.client.email
+                },
+                articles: order.articles.length
+            },
+            stockUpdates: stockUpdates
+        };
+        
+        console.log(`🎉 Order creation successful:`, response.order);
+        
+        res.status(201).json(response);
         
     } catch (error) {
-        console.error('Create order error:', error);
+        console.error('💥 Order creation error:', error);
         
         if (error.name === 'ValidationError') {
             const errors = Object.values(error.errors).map(err => err.message);
-            return res.status(400).json({ message: 'Erreur de validation: ' + errors.join(', ') });
+            return res.status(400).json({ 
+                message: 'Erreur de validation: ' + errors.join(', '),
+                details: error.errors
+            });
         }
         
-        res.status(500).json({ message: 'Erreur serveur lors de la création de la commande' });
+        if (error.code === 11000) {
+            return res.status(400).json({ 
+                message: 'Numéro de commande déjà existant, veuillez réessayer'
+            });
+        }
+        
+        res.status(500).json({ 
+            message: 'Erreur serveur lors de la création de la commande',
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
+        });
     }
 });
 
-// GET /api/orders - Get orders (authenticated user only)
+// GET /api/orders - Get orders for authenticated users
 router.get('/', auth, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -448,6 +553,15 @@ router.post('/:id/cancel', auth, async (req, res) => {
         console.error('Cancel order error:', error);
         res.status(500).json({ message: 'Erreur serveur' });
     }
+});
+
+// Health check endpoint for orders
+router.get('/health/check', (req, res) => {
+    res.json({
+        status: 'ok',
+        service: 'orders',
+        timestamp: new Date().toISOString()
+    });
 });
 
 module.exports = router;

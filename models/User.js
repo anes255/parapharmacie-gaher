@@ -4,48 +4,49 @@ const bcrypt = require('bcryptjs');
 const UserSchema = new mongoose.Schema({
     nom: {
         type: String,
-        required: [true, 'Le nom est obligatoire'],
+        required: [true, 'Le nom est requis'],
         trim: true,
         maxlength: [50, 'Le nom ne peut pas dépasser 50 caractères']
     },
     prenom: {
         type: String,
-        required: [true, 'Le prénom est obligatoire'],
+        required: [true, 'Le prénom est requis'],
         trim: true,
         maxlength: [50, 'Le prénom ne peut pas dépasser 50 caractères']
     },
     email: {
         type: String,
-        required: [true, 'L\'email est obligatoire'],
+        required: [true, 'L\'email est requis'],
         unique: true,
         lowercase: true,
         trim: true,
-        match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Veuillez entrer un email valide']
+        match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Format d\'email invalide']
     },
     password: {
         type: String,
-        required: [true, 'Le mot de passe est obligatoire'],
+        required: [true, 'Le mot de passe est requis'],
         minlength: [6, 'Le mot de passe doit contenir au moins 6 caractères'],
-        select: false // Don't return password by default
+        select: false // Don't include password in queries by default
     },
     telephone: {
         type: String,
-        required: [true, 'Le numéro de téléphone est obligatoire'],
-        match: [/^(\+213|0)[5-9]\d{8}$/, 'Veuillez entrer un numéro de téléphone algérien valide']
+        required: [true, 'Le téléphone est requis'],
+        unique: true,
+        match: [/^(\+213|0)[5-9]\d{8}$/, 'Format de téléphone algérien invalide']
     },
     adresse: {
         type: String,
-        default: '',
-        maxlength: [200, 'L\'adresse ne peut pas dépasser 200 caractères']
+        trim: true,
+        default: ''
     },
     ville: {
         type: String,
-        default: '',
-        maxlength: [50, 'La ville ne peut pas dépasser 50 caractères']
+        trim: true,
+        default: ''
     },
     wilaya: {
         type: String,
-        required: [true, 'La wilaya est obligatoire'],
+        required: [true, 'La wilaya est requise'],
         enum: [
             'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar',
             'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger',
@@ -58,8 +59,9 @@ const UserSchema = new mongoose.Schema({
     },
     codePostal: {
         type: String,
+        trim: true,
         default: '',
-        match: [/^\d{5}$/, 'Le code postal doit contenir 5 chiffres']
+        match: [/^\d{5}$|^$/, 'Code postal invalide (5 chiffres requis)']
     },
     role: {
         type: String,
@@ -70,10 +72,6 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: true
     },
-    emailVerifie: {
-        type: Boolean,
-        default: false
-    },
     dateInscription: {
         type: Date,
         default: Date.now
@@ -83,46 +81,52 @@ const UserSchema = new mongoose.Schema({
         default: Date.now
     },
     preferences: {
-        newsletter: {
-            type: Boolean,
-            default: true
-        },
         notifications: {
             type: Boolean,
             default: true
         },
-        langue: {
+        newsletter: {
+            type: Boolean,
+            default: false
+        },
+        language: {
             type: String,
             enum: ['fr', 'ar'],
             default: 'fr'
         }
     },
-    // Password reset functionality
     resetPasswordToken: String,
-    resetPasswordExpire: Date,
-    
-    // Email verification
-    emailVerificationToken: String,
-    emailVerificationExpire: Date
+    resetPasswordExpires: Date,
+    emailVerified: {
+        type: Boolean,
+        default: false
+    },
+    emailVerificationToken: String
 }, {
-    timestamps: true
+    timestamps: true,
+    toJSON: {
+        transform: function(doc, ret) {
+            delete ret.password;
+            delete ret.resetPasswordToken;
+            delete ret.resetPasswordExpires;
+            delete ret.emailVerificationToken;
+            return ret;
+        }
+    }
 });
 
-// Indexes for performance
+// Index for performance
 UserSchema.index({ email: 1 });
 UserSchema.index({ telephone: 1 });
-UserSchema.index({ wilaya: 1 });
-UserSchema.index({ role: 1 });
-UserSchema.index({ actif: 1 });
+UserSchema.index({ role: 1, actif: 1 });
 
-// Hash password before saving
+// Pre-save middleware to hash password
 UserSchema.pre('save', async function(next) {
-    // Only hash if password is modified
-    if (!this.isModified('password')) {
-        next();
-    }
+    // Only hash the password if it has been modified (or is new)
+    if (!this.isModified('password')) return next();
     
     try {
+        // Hash password with cost of 12
         const salt = await bcrypt.genSalt(12);
         this.password = await bcrypt.hash(this.password, salt);
         next();
@@ -131,45 +135,46 @@ UserSchema.pre('save', async function(next) {
     }
 });
 
-// Method to compare password
+// Instance method to check password
 UserSchema.methods.comparePassword = async function(candidatePassword) {
-    return await bcrypt.compare(candidatePassword, this.password);
+    try {
+        return await bcrypt.compare(candidatePassword, this.password);
+    } catch (error) {
+        throw new Error('Erreur lors de la vérification du mot de passe');
+    }
 };
 
-// Method to generate password reset token
-UserSchema.methods.getResetPasswordToken = function() {
-    // Generate token
-    const resetToken = crypto.randomBytes(20).toString('hex');
-    
-    // Hash and set to resetPasswordToken field
-    this.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-    
-    // Set expire time (10 minutes)
-    this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
-    
-    return resetToken;
+// Instance method to update last connection
+UserSchema.methods.updateLastConnection = async function() {
+    try {
+        this.dernierConnexion = new Date();
+        await this.save({ validateBeforeSave: false });
+    } catch (error) {
+        console.log('Error updating last connection:', error);
+    }
 };
 
-// Method to generate email verification token
-UserSchema.methods.getEmailVerificationToken = function() {
-    const crypto = require('crypto');
-    
-    // Generate token
-    const verificationToken = crypto.randomBytes(20).toString('hex');
-    
-    // Hash and set to emailVerificationToken field
-    this.emailVerificationToken = crypto.createHash('sha256').update(verificationToken).digest('hex');
-    
-    // Set expire time (24 hours)
-    this.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000;
-    
-    return verificationToken;
+// Static method to find by email with password
+UserSchema.statics.findByEmailWithPassword = function(email) {
+    return this.findOne({ email: email.toLowerCase(), actif: true }).select('+password');
 };
 
-// Method to update last connection
-UserSchema.methods.updateLastConnection = function() {
-    this.dernierConnexion = new Date();
-    return this.save();
+// Static method to check if email exists
+UserSchema.statics.emailExists = function(email, excludeId = null) {
+    const query = { email: email.toLowerCase() };
+    if (excludeId) {
+        query._id = { $ne: excludeId };
+    }
+    return this.findOne(query);
+};
+
+// Static method to check if phone exists
+UserSchema.statics.phoneExists = function(telephone, excludeId = null) {
+    const query = { telephone };
+    if (excludeId) {
+        query._id = { $ne: excludeId };
+    }
+    return this.findOne(query);
 };
 
 // Virtual for full name
@@ -177,25 +182,7 @@ UserSchema.virtual('nomComplet').get(function() {
     return `${this.prenom} ${this.nom}`;
 });
 
-// Transform output (remove sensitive fields)
-UserSchema.methods.toJSON = function() {
-    const userObject = this.toObject();
-    delete userObject.password;
-    delete userObject.resetPasswordToken;
-    delete userObject.resetPasswordExpire;
-    delete userObject.emailVerificationToken;
-    delete userObject.emailVerificationExpire;
-    return userObject;
-};
-
-// Static method to find active users
-UserSchema.statics.findActive = function() {
-    return this.find({ actif: true });
-};
-
-// Static method to find by wilaya
-UserSchema.statics.findByWilaya = function(wilaya) {
-    return this.find({ wilaya, actif: true });
-};
+// Ensure virtual fields are serialized
+UserSchema.set('toJSON', { virtuals: true });
 
 module.exports = mongoose.model('User', UserSchema);

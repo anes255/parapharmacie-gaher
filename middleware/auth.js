@@ -7,69 +7,59 @@ const auth = async (req, res, next) => {
         // Get token from header
         const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
         
+        // Check if no token
         if (!token) {
-            return res.status(401).json({ 
-                message: 'Aucun token fourni, accès refusé' 
+            return res.status(401).json({
+                message: 'Aucun token fourni, autorisation refusée'
             });
         }
         
-        // Verify token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-        
-        // Get user from database
-        const user = await User.findById(decoded.id);
-        
-        if (!user) {
-            return res.status(401).json({ 
-                message: 'Token invalide, utilisateur non trouvé' 
+        try {
+            // Verify token
+            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+            
+            // Find user by id from token
+            const user = await User.findById(decoded.id);
+            
+            if (!user || !user.actif) {
+                return res.status(401).json({
+                    message: 'Token invalide - utilisateur non trouvé'
+                });
+            }
+            
+            // Add user to request object
+            req.user = {
+                id: user._id,
+                email: user.email,
+                role: user.role,
+                nom: user.nom,
+                prenom: user.prenom
+            };
+            
+            next();
+            
+        } catch (tokenError) {
+            console.error('Token verification error:', tokenError.message);
+            return res.status(401).json({
+                message: 'Token invalide ou expiré'
             });
         }
-        
-        if (!user.actif) {
-            return res.status(401).json({ 
-                message: 'Compte utilisateur désactivé' 
-            });
-        }
-        
-        // Add user to request object
-        req.user = {
-            id: user._id,
-            email: user.email,
-            role: user.role,
-            nom: user.nom,
-            prenom: user.prenom
-        };
-        
-        next();
         
     } catch (error) {
         console.error('Auth middleware error:', error);
-        
-        if (error.name === 'JsonWebTokenError') {
-            return res.status(401).json({ 
-                message: 'Token invalide' 
-            });
-        }
-        
-        if (error.name === 'TokenExpiredError') {
-            return res.status(401).json({ 
-                message: 'Token expiré' 
-            });
-        }
-        
-        res.status(500).json({ 
-            message: 'Erreur serveur lors de l\'authentification' 
+        res.status(500).json({
+            message: 'Erreur serveur dans l\'authentification'
         });
     }
 };
 
-// Admin authorization middleware
+// Admin authentication middleware
 const adminAuth = async (req, res, next) => {
     try {
-        // First run the auth middleware
+        // First run the regular auth
         await new Promise((resolve, reject) => {
-            auth(req, res, (err) => {
-                if (err) reject(err);
+            auth(req, res, (error) => {
+                if (error) reject(error);
                 else resolve();
             });
         });
@@ -77,7 +67,7 @@ const adminAuth = async (req, res, next) => {
         // Check if user is admin
         if (req.user.role !== 'admin') {
             return res.status(403).json({
-                message: 'Accès refusé. Droits administrateur requis.'
+                message: 'Accès refusé - Droits administrateur requis'
             });
         }
         
@@ -86,7 +76,7 @@ const adminAuth = async (req, res, next) => {
     } catch (error) {
         console.error('Admin auth error:', error);
         res.status(500).json({
-            message: 'Erreur serveur lors de la vérification des droits'
+            message: 'Erreur serveur dans l\'authentification administrateur'
         });
     }
 };
@@ -96,32 +86,31 @@ const optionalAuth = async (req, res, next) => {
     try {
         const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
         
-        if (!token) {
-            req.user = null;
-            return next();
-        }
-        
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-        const user = await User.findById(decoded.id);
-        
-        if (user && user.actif) {
-            req.user = {
-                id: user._id,
-                email: user.email,
-                role: user.role,
-                nom: user.nom,
-                prenom: user.prenom
-            };
-        } else {
-            req.user = null;
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+                const user = await User.findById(decoded.id);
+                
+                if (user && user.actif) {
+                    req.user = {
+                        id: user._id,
+                        email: user.email,
+                        role: user.role,
+                        nom: user.nom,
+                        prenom: user.prenom
+                    };
+                }
+            } catch (tokenError) {
+                // Ignore token errors in optional auth
+                console.log('Optional auth - invalid token ignored');
+            }
         }
         
         next();
         
     } catch (error) {
-        // If token is invalid, just set user to null
-        req.user = null;
-        next();
+        console.error('Optional auth error:', error);
+        next(); // Continue anyway
     }
 };
 

@@ -1,567 +1,232 @@
 const express = require('express');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
-const { auth, optionalAuth } = require('../middleware/auth');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 
-// POST /api/orders - Create new order (Fixed for cross-device visibility)
-router.post('/', optionalAuth, async (req, res) => {
+// Generate unique order number with timestamp and random component
+function generateOrderNumber() {
+    const timestamp = Date.now().toString();
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `CMD-${timestamp.slice(-8)}${random}`;
+}
+
+// Create new order
+router.post('/', async (req, res) => {
     try {
-        console.log('📦 Creating new order:', JSON.stringify(req.body, null, 2));
+        console.log('📦 Creating new order...', req.body);
         
-        const {
-            client,
-            articles,
-            sousTotal,
-            fraisLivraison,
-            total,
-            modePaiement,
-            commentaires
-        } = req.body;
+        const { produits, total, clientInfo, adresseLivraison, fraisLivraison } = req.body;
         
-        // Enhanced validation
-        if (!client || !articles || !Array.isArray(articles) || articles.length === 0) {
-            console.error('❌ Missing client or articles');
-            return res.status(400).json({ 
-                message: 'Informations client et articles requis',
-                details: { client: !!client, articles: articles?.length || 0 }
-            });
+        // Validation
+        if (!produits || produits.length === 0) {
+            return res.status(400).json({ message: 'Aucun produit dans la commande' });
         }
         
-        // Validate client information
-        const requiredClientFields = ['nom', 'prenom', 'email', 'telephone', 'adresse', 'wilaya'];
-        for (const field of requiredClientFields) {
-            if (!client[field] || client[field].trim() === '') {
-                console.error(`❌ Missing client field: ${field}`);
-                return res.status(400).json({ 
-                    message: `Champ client requis: ${field}` 
-                });
-            }
+        if (!clientInfo || !clientInfo.nom || !clientInfo.telephone) {
+            return res.status(400).json({ message: 'Informations client manquantes' });
         }
         
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(client.email)) {
-            return res.status(400).json({ message: 'Format email invalide' });
+        if (!adresseLivraison || !adresseLivraison.adresse || !adresseLivraison.wilaya) {
+            return res.status(400).json({ message: 'Adresse de livraison manquante' });
         }
         
-        // Validate phone format (Algerian numbers)
-        const phoneRegex = /^(\+213|0)[0-9]{9}$/;
-        if (!phoneRegex.test(client.telephone.replace(/\s/g, ''))) {
-            return res.status(400).json({ message: 'Format téléphone invalide' });
-        }
+        // Generate unique order number with multiple attempts
+        let numeroCommande;
+        let attempts = 0;
+        const maxAttempts = 10;
         
-        // Validate totals
-        if (typeof sousTotal !== 'number' || typeof fraisLivraison !== 'number' || typeof total !== 'number') {
-            console.error('❌ Invalid pricing data');
-            return res.status(400).json({ message: 'Données de prix invalides' });
-        }
-        
-        // Validate and process articles
-        const validatedArticles = [];
-        let calculatedSubtotal = 0;
-        
-        for (let i = 0; i < articles.length; i++) {
-            const article = articles[i];
-            console.log(`🔍 Validating article ${i + 1}:`, article);
+        do {
+            numeroCommande = generateOrderNumber();
+            const existingOrder = await Order.findOne({ numeroCommande });
             
-            if (!article.id || !article.nom || typeof article.prix !== 'number' || typeof article.quantite !== 'number') {
-                console.error(`❌ Invalid article at index ${i}:`, article);
-                return res.status(400).json({ 
-                    message: `Article invalide à la position ${i + 1}`,
-                    article: article
+            if (!existingOrder) {
+                break; // Unique number found
+            }
+            
+            attempts++;
+            
+            if (attempts >= maxAttempts) {
+                console.error('❌ Cannot generate unique order number after', maxAttempts, 'attempts');
+                return res.status(500).json({ 
+                    message: 'Erreur technique lors de la génération du numéro de commande. Veuillez réessayer.' 
                 });
             }
             
-            if (article.quantite <= 0) {
+            // Add small delay to ensure timestamp uniqueness
+            await new Promise(resolve => setTimeout(resolve, 10));
+            
+        } while (true);
+        
+        console.log('✅ Generated unique order number:', numeroCommande, 'after', attempts + 1, 'attempts');
+        
+        // Verify product availability and calculate total
+        let calculatedTotal = 0;
+        let sousTotal = 0;
+        
+        for (let item of produits) {
+            const product = await Product.findById(item.produit);
+            
+            if (!product) {
                 return res.status(400).json({ 
-                    message: `Quantité invalide pour ${article.nom}` 
+                    message: `Produit non trouvé: ${item.nom || item.produit}` 
                 });
             }
             
-            // Try to find and validate product (optional - don't fail if product not found)
-            let product = null;
-            try {
-                product = await Product.findById(article.id);
-                if (product) {
-                    console.log(`✅ Found product: ${product.nom}`);
-                    
-                    if (!product.actif) {
-                        return res.status(400).json({ 
-                            message: `Produit non disponible: ${article.nom}` 
-                        });
-                    }
-                    
-                    if (product.stock < article.quantite) {
-                        return res.status(400).json({ 
-                            message: `Stock insuffisant pour ${article.nom}. Stock disponible: ${product.stock}` 
-                        });
-                    }
-                }
-            } catch (error) {
-                console.warn(`⚠️ Could not find product ${article.id}, continuing anyway`);
+            if (product.stock < item.quantite) {
+                return res.status(400).json({ 
+                    message: `Stock insuffisant pour ${product.nom}. Stock disponible: ${product.stock}` 
+                });
             }
             
-            // Create validated article
-            const validatedArticle = {
-                productId: article.id,
-                nom: article.nom,
-                prix: article.prix,
-                quantite: article.quantite,
-                image: article.image || '',
-                categorie: article.categorie || (product ? product.categorie : '')
-            };
-            
-            validatedArticles.push(validatedArticle);
-            calculatedSubtotal += article.prix * article.quantite;
+            const itemTotal = product.prix * item.quantite;
+            sousTotal += itemTotal;
         }
         
-        // Validate calculated totals (allow small rounding differences)
-        if (Math.abs(calculatedSubtotal - sousTotal) > 5) {
-            console.error(`❌ Subtotal mismatch: calculated=${calculatedSubtotal}, provided=${sousTotal}`);
-            return res.status(400).json({ 
-                message: 'Erreur de calcul du sous-total',
-                calculated: calculatedSubtotal,
-                provided: sousTotal
-            });
-        }
+        // Calculate shipping
+        const shippingCost = sousTotal >= 5000 ? 0 : (fraisLivraison || 300);
+        calculatedTotal = sousTotal + shippingCost;
         
-        const expectedTotal = calculatedSubtotal + fraisLivraison;
-        if (Math.abs(expectedTotal - total) > 5) {
-            console.error(`❌ Total mismatch: expected=${expectedTotal}, provided=${total}`);
-            return res.status(400).json({ 
-                message: 'Erreur de calcul du total',
-                expected: expectedTotal,
-                provided: total
-            });
+        // Verify total matches
+        if (Math.abs(calculatedTotal - total) > 1) { // Allow 1 DA difference for rounding
+            console.warn('⚠️ Total mismatch:', { sent: total, calculated: calculatedTotal });
         }
-        
-        // Generate unique order number
-        const numeroCommande = await Order.generateOrderNumber();
-        console.log(`🏷️ Generated order number: ${numeroCommande}`);
         
         // Create order
-        const orderData = {
+        const order = new Order({
             numeroCommande,
-            utilisateur: req.user ? req.user._id : null,
-            client: {
-                nom: client.nom.trim(),
-                prenom: client.prenom.trim(),
-                email: client.email.toLowerCase().trim(),
-                telephone: client.telephone.replace(/\s/g, '').trim(),
-                adresse: client.adresse.trim(),
-                wilaya: client.wilaya,
-                codePostal: client.codePostal ? client.codePostal.trim() : ''
+            produits: produits.map(item => ({
+                produit: item.produit,
+                nom: item.nom,
+                prix: item.prix,
+                quantite: item.quantite,
+                image: item.image
+            })),
+            clientInfo: {
+                nom: clientInfo.nom,
+                prenom: clientInfo.prenom || '',
+                email: clientInfo.email || '',
+                telephone: clientInfo.telephone
             },
-            articles: validatedArticles,
-            sousTotal: Math.round(calculatedSubtotal),
-            fraisLivraison: Math.round(fraisLivraison),
-            total: Math.round(calculatedSubtotal + fraisLivraison),
-            modePaiement: modePaiement || 'paiement-livraison',
-            commentaires: commentaires ? commentaires.trim() : '',
+            adresseLivraison,
+            sousTotal,
+            fraisLivraison: shippingCost,
+            total: calculatedTotal,
             statut: 'en-attente',
             dateCommande: new Date(),
-            createdBy: req.user ? 'user' : 'guest'
-        };
-        
-        console.log('💾 Creating order in database:', {
-            numeroCommande: orderData.numeroCommande,
-            client: orderData.client.email,
-            articles: orderData.articles.length,
-            total: orderData.total
+            user: req.user ? req.user.id : null // Link to user if authenticated
         });
         
-        const order = new Order(orderData);
+        // Save order
         await order.save();
+        console.log('✅ Order saved successfully:', numeroCommande);
         
-        console.log(`✅ Order saved to database with ID: ${order._id}`);
+        // Update product stock (optional - uncomment if you want to reduce stock immediately)
+        // for (let item of produits) {
+        //     await Product.findByIdAndUpdate(item.produit, {
+        //         $inc: { stock: -item.quantite }
+        //     });
+        // }
         
-        // Update product stock if products were found
-        const stockUpdates = [];
-        for (const article of validatedArticles) {
-            try {
-                const updateResult = await Product.findByIdAndUpdate(
-                    article.productId,
-                    { $inc: { stock: -article.quantite } },
-                    { new: true }
-                );
-                
-                if (updateResult) {
-                    stockUpdates.push({
-                        productId: article.productId,
-                        nom: article.nom,
-                        newStock: updateResult.stock
-                    });
-                    console.log(`📦 Updated stock for ${article.nom}: ${updateResult.stock}`);
-                }
-            } catch (error) {
-                console.warn(`⚠️ Could not update stock for product ${article.productId}:`, error.message);
-            }
-        }
-        
-        // Return success response
-        const response = {
-            success: true,
+        res.status(201).json({
             message: 'Commande créée avec succès',
+            numeroCommande,
             order: {
                 _id: order._id,
-                numeroCommande: order.numeroCommande,
-                total: order.total,
+                numeroCommande,
+                total: calculatedTotal,
                 statut: order.statut,
-                dateCommande: order.dateCommande,
-                client: {
-                    nom: order.client.nom,
-                    prenom: order.client.prenom,
-                    email: order.client.email
-                },
-                articles: order.articles.length
-            },
-            stockUpdates: stockUpdates
-        };
-        
-        console.log(`🎉 Order creation successful:`, response.order);
-        
-        res.status(201).json(response);
+                dateCommande: order.dateCommande
+            }
+        });
         
     } catch (error) {
-        console.error('💥 Order creation error:', error);
+        console.error('❌ Order creation error:', error);
         
-        if (error.name === 'ValidationError') {
-            const errors = Object.values(error.errors).map(err => err.message);
+        if (error.code === 11000 && error.keyPattern && error.keyPattern.numeroCommande) {
+            // Duplicate key error
             return res.status(400).json({ 
-                message: 'Erreur de validation: ' + errors.join(', '),
-                details: error.errors
-            });
-        }
-        
-        if (error.code === 11000) {
-            return res.status(400).json({ 
-                message: 'Numéro de commande déjà existant, veuillez réessayer'
+                message: 'Numéro de commande déjà existant, veuillez réessayer' 
             });
         }
         
         res.status(500).json({ 
-            message: 'Erreur serveur lors de la création de la commande',
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
+            message: 'Erreur lors de la création de la commande',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
 
-// GET /api/orders - Get orders for authenticated users
-router.get('/', auth, async (req, res) => {
+// Get order by number
+router.get('/:numeroCommande', async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
-        
-        // If not admin, only show user's orders
-        if (req.user.role !== 'admin') {
-            query = {
-                $or: [
-                    { utilisateur: req.user._id },
-                    { 'client.email': req.user.email }
-                ]
-            };
-        }
-        
-        // Filter by status
-        if (req.query.statut) {
-            query.statut = req.query.statut;
-        }
-        
-        const orders = await Order.find(query)
-            .sort({ dateCommande: -1 })
-            .skip(skip)
-            .limit(limit)
-            .populate('utilisateur', 'nom prenom email');
-        
-        const total = await Order.countDocuments(query);
-        
-        res.json({
-            orders,
-            pagination: {
-                currentPage: page,
-                totalPages: Math.ceil(total / limit),
-                totalOrders: total
-            }
-        });
-        
-    } catch (error) {
-        console.error('Get orders error:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
-    }
-});
-
-// GET /api/orders/:id - Get specific order
-router.get('/:id', optionalAuth, async (req, res) => {
-    try {
-        const order = await Order.findOne({
-            $or: [
-                { _id: req.params.id },
-                { numeroCommande: req.params.id }
-            ]
-        }).populate('utilisateur', 'nom prenom email');
+        const order = await Order.findOne({ numeroCommande: req.params.numeroCommande })
+            .populate('produits.produit')
+            .populate('user', 'nom prenom email');
         
         if (!order) {
             return res.status(404).json({ message: 'Commande non trouvée' });
-        }
-        
-        // Check permissions
-        if (req.user) {
-            const canView = req.user.role === 'admin' || 
-                          order.utilisateur?._id.toString() === req.user._id.toString() ||
-                          order.client.email === req.user.email;
-            
-            if (!canView) {
-                return res.status(403).json({ message: 'Accès refusé à cette commande' });
-            }
-        } else {
-            // For guest users, don't return order details for security
-            return res.status(401).json({ message: 'Authentification requise' });
         }
         
         res.json(order);
         
     } catch (error) {
-        console.error('Get order error:', error);
+        console.error('Error fetching order:', error);
         res.status(500).json({ message: 'Erreur serveur' });
     }
 });
 
-// PUT /api/orders/:id - Update order (admin only or limited user updates)
-router.put('/:id', auth, async (req, res) => {
-    try {
-        const order = await Order.findById(req.params.id);
-        
-        if (!order) {
-            return res.status(404).json({ message: 'Commande non trouvée' });
-        }
-        
-        // Check permissions
-        const isAdmin = req.user.role === 'admin';
-        const isOwner = order.utilisateur?.toString() === req.user._id.toString() || 
-                       order.client.email === req.user.email;
-        
-        if (!isAdmin && !isOwner) {
-            return res.status(403).json({ message: 'Accès refusé' });
-        }
-        
-        const { statut, commentaires, adresseLivraison } = req.body;
-        
-        // Admin can update anything
-        if (isAdmin) {
-            if (statut) {
-                const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
-                if (validStatuses.includes(statut)) {
-                    const oldStatus = order.statut;
-                    order.statut = statut;
-                    
-                    // Log modification
-                    order.addModification('status_change', oldStatus, statut, req.user._id);
-                    
-                    // Set dates based on status
-                    const now = new Date();
-                    switch (statut) {
-                        case 'confirmée':
-                            if (!order.dateConfirmation) order.dateConfirmation = now;
-                            break;
-                        case 'expédiée':
-                            if (!order.dateExpedition) order.dateExpedition = now;
-                            break;
-                        case 'livrée':
-                            if (!order.dateLivraison) order.dateLivraison = now;
-                            break;
-                    }
-                }
-            }
-            
-            if (commentaires !== undefined) {
-                order.commentaires = commentaires;
-            }
-            
-            order.lastModifiedBy = req.user._id;
-        } else {
-            // Users can only cancel their own orders if they're still pending
-            if (statut === 'annulée' && order.statut === 'en-attente') {
-                order.statut = 'annulée';
-                order.addModification('cancel_by_user', 'en-attente', 'annulée', req.user._id);
-                
-                // Restore product stock
-                for (const article of order.articles) {
-                    await Product.findByIdAndUpdate(
-                        article.productId,
-                        { $inc: { stock: article.quantite } }
-                    );
-                }
-            } else if (adresseLivraison && order.statut === 'en-attente') {
-                // Allow address update if order is still pending
-                order.client.adresse = adresseLivraison.trim();
-                order.addModification('address_update', order.client.adresse, adresseLivraison, req.user._id);
-            } else {
-                return res.status(400).json({ message: 'Modification non autorisée' });
-            }
-        }
-        
-        await order.save();
-        
-        res.json({
-            message: 'Commande mise à jour avec succès',
-            order
-        });
-        
-        console.log(`Order ${order.numeroCommande} updated by ${req.user.email}`);
-        
-    } catch (error) {
-        console.error('Update order error:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
-    }
-});
-
-// GET /api/orders/user/all - Get all orders for current user
+// Get user orders (protected route)
 router.get('/user/all', auth, async (req, res) => {
     try {
-        const orders = await Order.find({
-            $or: [
-                { utilisateur: req.user._id },
-                { 'client.email': req.user.email }
-            ]
-        })
-        .sort({ dateCommande: -1 })
-        .select('numeroCommande statut total dateCommande articles')
-        .lean();
+        const orders = await Order.find({ user: req.user.id })
+            .sort({ dateCommande: -1 })
+            .populate('produits.produit');
         
-        res.json({ orders });
+        res.json(orders);
         
     } catch (error) {
-        console.error('Get user orders error:', error);
+        console.error('Error fetching user orders:', error);
         res.status(500).json({ message: 'Erreur serveur' });
     }
 });
 
-// GET /api/orders/track/:numeroCommande - Track order by order number (public)
-router.get('/track/:numeroCommande', async (req, res) => {
+// Update order status (admin only)
+router.patch('/:id/status', auth, async (req, res) => {
     try {
-        const order = await Order.findOne({ 
-            numeroCommande: req.params.numeroCommande 
-        }).select('numeroCommande statut dateCommande dateConfirmation dateExpedition dateLivraison total trackingNumber');
+        const { statut } = req.body;
         
-        if (!order) {
-            return res.status(404).json({ message: 'Commande non trouvée' });
-        }
+        // Check if user is admin
+        const User = require('../models/User');
+        const user = await User.findById(req.user.id);
         
-        // Return limited tracking information
-        const trackingInfo = {
-            numeroCommande: order.numeroCommande,
-            statut: order.statut,
-            total: order.total,
-            dateCommande: order.dateCommande,
-            dateConfirmation: order.dateConfirmation,
-            dateExpedition: order.dateExpedition,
-            dateLivraison: order.dateLivraison,
-            trackingNumber: order.trackingNumber,
-            timeline: []
-        };
-        
-        // Build timeline
-        trackingInfo.timeline.push({
-            statut: 'en-attente',
-            date: order.dateCommande,
-            description: 'Commande reçue et en cours de traitement'
-        });
-        
-        if (order.dateConfirmation) {
-            trackingInfo.timeline.push({
-                statut: 'confirmée',
-                date: order.dateConfirmation,
-                description: 'Commande confirmée et en préparation'
-            });
-        }
-        
-        if (order.dateExpedition) {
-            trackingInfo.timeline.push({
-                statut: 'expédiée',
-                date: order.dateExpedition,
-                description: 'Commande expédiée'
-            });
-        }
-        
-        if (order.dateLivraison) {
-            trackingInfo.timeline.push({
-                statut: 'livrée',
-                date: order.dateLivraison,
-                description: 'Commande livrée'
-            });
-        }
-        
-        res.json(trackingInfo);
-        
-    } catch (error) {
-        console.error('Track order error:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
-    }
-});
-
-// POST /api/orders/:id/cancel - Cancel order
-router.post('/:id/cancel', auth, async (req, res) => {
-    try {
-        const order = await Order.findById(req.params.id);
-        
-        if (!order) {
-            return res.status(404).json({ message: 'Commande non trouvée' });
-        }
-        
-        // Check permissions
-        const isOwner = order.utilisateur?.toString() === req.user._id.toString() || 
-                       order.client.email === req.user.email;
-        const isAdmin = req.user.role === 'admin';
-        
-        if (!isOwner && !isAdmin) {
+        if (user.role !== 'admin') {
             return res.status(403).json({ message: 'Accès refusé' });
         }
         
-        // Can only cancel if order is not yet shipped
-        if (['expédiée', 'livrée'].includes(order.statut)) {
-            return res.status(400).json({ message: 'Impossible d\'annuler une commande déjà expédiée' });
+        const validStatuses = ['en-attente', 'confirmée', 'expédiée', 'livrée', 'annulée'];
+        
+        if (!validStatuses.includes(statut)) {
+            return res.status(400).json({ message: 'Statut invalide' });
         }
         
-        if (order.statut === 'annulée') {
-            return res.status(400).json({ message: 'Commande déjà annulée' });
+        const order = await Order.findByIdAndUpdate(
+            req.params.id,
+            { statut, dateModification: new Date() },
+            { new: true }
+        );
+        
+        if (!order) {
+            return res.status(404).json({ message: 'Commande non trouvée' });
         }
         
-        // Cancel order
-        order.statut = 'annulée';
-        order.addModification('cancel', order.statut, 'annulée', req.user._id);
-        
-        // Restore product stock
-        for (const article of order.articles) {
-            await Product.findByIdAndUpdate(
-                article.productId,
-                { $inc: { stock: article.quantite } }
-            );
-        }
-        
-        await order.save();
-        
-        res.json({ message: 'Commande annulée avec succès' });
-        
-        console.log(`Order ${order.numeroCommande} cancelled by ${req.user.email}`);
+        res.json({ message: 'Statut mis à jour', order });
         
     } catch (error) {
-        console.error('Cancel order error:', error);
+        console.error('Error updating order status:', error);
         res.status(500).json({ message: 'Erreur serveur' });
     }
-});
-
-// Health check endpoint for orders
-router.get('/health/check', (req, res) => {
-    res.json({
-        status: 'ok',
-        service: 'orders',
-        timestamp: new Date().toISOString()
-    });
 });
 
 module.exports = router;

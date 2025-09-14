@@ -3,119 +3,87 @@ const Product = require('../models/Product');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
-const multer = require('multer');
-const path = require('path');
 
 const router = express.Router();
 
-// Middleware pour vérifier les droits admin
-const adminAuth = async (req, res, next) => {
-    try {
-        await auth(req, res, () => {});
-        
-        const user = await User.findById(req.user.id);
-        if (!user || user.role !== 'admin') {
-            return res.status(403).json({
-                message: 'Accès refusé - Droits administrateur requis'
-            });
-        }
-        
-        next();
-    } catch (error) {
-        return res.status(401).json({
-            message: 'Token invalide'
+// Middleware to check if user is admin
+const adminAuth = (req, res, next) => {
+    if (!req.user || req.user.role !== 'admin') {
+        return res.status(403).json({
+            message: 'Accès refusé - Droits administrateur requis'
         });
     }
+    next();
 };
 
-// Configuration multer pour upload d'images
-const storage = multer.memoryStorage();
-const upload = multer({ 
-    storage: storage,
-    limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB max
-    },
-    fileFilter: (req, file, cb) => {
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Seules les images sont autorisées'), false);
-        }
-    }
-});
+// Apply auth middleware to all admin routes
+router.use(auth);
+router.use(adminAuth);
 
 // @route   GET /api/admin/dashboard
 // @desc    Get admin dashboard statistics
-// @access  Private (Admin only)
-router.get('/dashboard', adminAuth, async (req, res) => {
+// @access  Private/Admin
+router.get('/dashboard', async (req, res) => {
     try {
         console.log('📊 Loading admin dashboard...');
         
-        // Statistiques produits
+        // Get counts
         const totalProducts = await Product.countDocuments();
-        const activeProducts = await Product.countDocuments({ actif: true });
-        const featuredProducts = await Product.countDocuments({ enVedette: true });
-        const promotionProducts = await Product.countDocuments({ enPromotion: true });
-        
-        // Statistiques commandes
         const totalOrders = await Order.countDocuments();
         const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
-        const confirmedOrders = await Order.countDocuments({ statut: 'confirmée' });
-        const deliveredOrders = await Order.countDocuments({ statut: 'livrée' });
+        const totalUsers = await User.countDocuments({ actif: true });
         
-        // Statistiques utilisateurs
-        const totalUsers = await User.countDocuments();
-        const activeUsers = await User.countDocuments({ actif: true });
+        // Calculate monthly revenue
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
         
-        // Revenus du mois
-        const currentMonth = new Date();
-        const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
-        const monthlyOrders = await Order.find({
-            dateCommande: { $gte: startOfMonth },
-            statut: { $in: ['confirmée', 'expédiée', 'livrée'] }
-        });
+        const monthlyOrdersAgg = await Order.aggregate([
+            {
+                $match: {
+                    dateCommande: { $gte: startOfMonth },
+                    statut: { $nin: ['annulée'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$total' }
+                }
+            }
+        ]);
         
-        const monthlyRevenue = monthlyOrders.reduce((sum, order) => sum + (order.total || 0), 0);
+        const monthlyRevenue = monthlyOrdersAgg[0]?.total || 0;
         
-        // Produits avec stock faible
+        // Low stock products
         const lowStockProducts = await Product.find({ 
             stock: { $lte: 5 }, 
             actif: true 
         }).limit(10);
         
-        // Commandes récentes
+        // Recent orders
         const recentOrders = await Order.find()
             .sort({ dateCommande: -1 })
             .limit(5)
             .populate('client', 'nom prenom email');
         
         const stats = {
-            products: {
-                total: totalProducts,
-                active: activeProducts,
-                featured: featuredProducts,
-                promotions: promotionProducts
-            },
-            orders: {
-                total: totalOrders,
-                pending: pendingOrders,
-                confirmed: confirmedOrders,
-                delivered: deliveredOrders
-            },
-            users: {
-                total: totalUsers,
-                active: activeUsers
-            },
-            revenue: {
-                monthly: monthlyRevenue,
-                currency: 'DA'
-            },
-            lowStockProducts,
-            recentOrders
+            totalProducts,
+            totalOrders,
+            pendingOrders,
+            totalUsers,
+            monthlyRevenue,
+            lowStockProducts: lowStockProducts.length,
+            recentOrders: recentOrders.length
         };
         
         console.log('✅ Dashboard stats loaded');
-        res.json({ stats });
+        
+        res.json({
+            stats,
+            lowStockProducts,
+            recentOrders
+        });
         
     } catch (error) {
         console.error('❌ Dashboard error:', error);
@@ -127,24 +95,24 @@ router.get('/dashboard', adminAuth, async (req, res) => {
 
 // @route   GET /api/admin/products
 // @desc    Get all products for admin
-// @access  Private (Admin only)
-router.get('/products', adminAuth, async (req, res) => {
+// @access  Private/Admin
+router.get('/products', async (req, res) => {
     try {
-        console.log('📦 Loading all products for admin...');
+        console.log('📦 Loading admin products...');
         
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 50;
+        const limit = parseInt(req.query.limit) || 100;
         const skip = (page - 1) * limit;
         
         let query = {};
         
-        // Filtres admin
-        if (req.query.categorie) {
-            query.categorie = req.query.categorie;
-        }
-        
+        // Filters
         if (req.query.actif !== undefined) {
             query.actif = req.query.actif === 'true';
+        }
+        
+        if (req.query.categorie) {
+            query.categorie = req.query.categorie;
         }
         
         if (req.query.search) {
@@ -155,21 +123,51 @@ router.get('/products', adminAuth, async (req, res) => {
             ];
         }
         
+        if (req.query.enVedette !== undefined) {
+            query.enVedette = req.query.enVedette === 'true';
+        }
+        
+        if (req.query.enPromotion !== undefined) {
+            query.enPromotion = req.query.enPromotion === 'true';
+        }
+        
+        // Sort
+        let sort = { dateAjout: -1 };
+        if (req.query.sort) {
+            switch (req.query.sort) {
+                case 'nom':
+                    sort = { nom: 1 };
+                    break;
+                case 'prix':
+                    sort = { prix: 1 };
+                    break;
+                case 'stock':
+                    sort = { stock: 1 };
+                    break;
+                case 'dateAjout':
+                    sort = { dateAjout: -1 };
+                    break;
+            }
+        }
+        
         const products = await Product.find(query)
-            .sort({ dateAjout: -1 })
+            .sort(sort)
             .skip(skip)
             .limit(limit);
             
         const total = await Product.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
         
-        console.log(`✅ Loaded ${products.length} products for admin`);
+        console.log(`✅ Admin products loaded: ${products.length}`);
         
         res.json({
             products,
             pagination: {
                 currentPage: page,
-                totalPages: Math.ceil(total / limit),
-                totalProducts: total
+                totalPages,
+                totalProducts: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
             }
         });
         
@@ -182,81 +180,76 @@ router.get('/products', adminAuth, async (req, res) => {
 });
 
 // @route   POST /api/admin/products
-// @desc    Create new product
-// @access  Private (Admin only)
-router.post('/products', adminAuth, upload.single('image'), async (req, res) => {
+// @desc    Create a new product
+// @access  Private/Admin
+router.post('/products', async (req, res) => {
     try {
         console.log('➕ Creating new product...');
-        console.log('Product data:', req.body);
         
         const {
             nom,
             description,
             prix,
             prixOriginal,
-            stock,
             categorie,
+            image,
+            stock,
+            enPromotion,
+            enVedette,
             marque,
             ingredients,
             modeEmploi,
             precautions,
-            enVedette,
-            enPromotion,
             actif
         } = req.body;
         
         // Validation
-        if (!nom || !description || !prix || !stock || !categorie) {
+        if (!nom || !description || !prix || prix < 0 || !categorie || stock < 0) {
             return res.status(400).json({
-                message: 'Champs obligatoires manquants'
+                message: 'Données invalides. Vérifiez tous les champs obligatoires.'
             });
         }
         
-        // Prepare product data
-        const productData = {
+        // Check if product already exists
+        const existingProduct = await Product.findOne({ 
+            nom: { $regex: new RegExp(`^${nom}$`, 'i') },
+            marque: marque || { $exists: false }
+        });
+        
+        if (existingProduct) {
+            return res.status(400).json({
+                message: 'Un produit avec ce nom existe déjà'
+            });
+        }
+        
+        // Calculate promotion percentage if applicable
+        let pourcentagePromotion = 0;
+        if (enPromotion && prixOriginal && prixOriginal > prix) {
+            pourcentagePromotion = Math.round((prixOriginal - prix) / prixOriginal * 100);
+        }
+        
+        const product = new Product({
             nom: nom.trim(),
             description: description.trim(),
-            prix: parseFloat(prix),
-            stock: parseInt(stock),
+            prix: parseInt(prix),
+            prixOriginal: prixOriginal ? parseInt(prixOriginal) : undefined,
             categorie,
-            actif: actif !== 'false',
-            enVedette: enVedette === 'true',
-            enPromotion: enPromotion === 'true',
+            image: image || undefined,
+            stock: parseInt(stock),
+            enPromotion: Boolean(enPromotion),
+            enVedette: Boolean(enVedette),
+            marque: marque ? marque.trim() : undefined,
+            ingredients: ingredients ? ingredients.trim() : undefined,
+            modeEmploi: modeEmploi ? modeEmploi.trim() : undefined,
+            precautions: precautions ? precautions.trim() : undefined,
+            pourcentagePromotion,
+            actif: actif !== false, // Default to true
             dateAjout: new Date()
-        };
+        });
         
-        // Optional fields
-        if (marque) productData.marque = marque.trim();
-        if (ingredients) productData.ingredients = ingredients.trim();
-        if (modeEmploi) productData.modeEmploi = modeEmploi.trim();
-        if (precautions) productData.precautions = precautions.trim();
-        
-        // Handle promotion
-        if (prixOriginal && productData.enPromotion) {
-            productData.prixOriginal = parseFloat(prixOriginal);
-            if (productData.prixOriginal > productData.prix) {
-                productData.pourcentagePromotion = Math.round(
-                    ((productData.prixOriginal - productData.prix) / productData.prixOriginal) * 100
-                );
-            }
-        }
-        
-        // Handle image
-        if (req.file) {
-            // Convert image to base64 for storage
-            const imageBase64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-            productData.image = imageBase64;
-            console.log('Image uploaded and converted to base64');
-        } else if (req.body.imageUrl) {
-            // Use provided image URL/base64
-            productData.image = req.body.imageUrl;
-        }
-        
-        // Create product
-        const product = new Product(productData);
         await product.save();
         
-        console.log('✅ Product created:', product._id);
+        console.log('✅ Product created:', product.nom);
         
         res.status(201).json({
             message: 'Produit créé avec succès',
@@ -280,13 +273,14 @@ router.post('/products', adminAuth, upload.single('image'), async (req, res) => 
 });
 
 // @route   PUT /api/admin/products/:id
-// @desc    Update product
-// @access  Private (Admin only)
-router.put('/products/:id', adminAuth, upload.single('image'), async (req, res) => {
+// @desc    Update a product
+// @access  Private/Admin
+router.put('/products/:id', async (req, res) => {
     try {
-        console.log('🔄 Updating product:', req.params.id);
+        console.log('📝 Updating product:', req.params.id);
         
         const product = await Product.findById(req.params.id);
+        
         if (!product) {
             return res.status(404).json({
                 message: 'Produit non trouvé'
@@ -298,58 +292,44 @@ router.put('/products/:id', adminAuth, upload.single('image'), async (req, res) 
             description,
             prix,
             prixOriginal,
-            stock,
             categorie,
+            image,
+            stock,
+            enPromotion,
+            enVedette,
             marque,
             ingredients,
             modeEmploi,
             precautions,
-            enVedette,
-            enPromotion,
             actif
         } = req.body;
         
-        // Update fields
-        if (nom) product.nom = nom.trim();
-        if (description) product.description = description.trim();
-        if (prix !== undefined) product.prix = parseFloat(prix);
+        // Update fields if provided
+        if (nom !== undefined) product.nom = nom.trim();
+        if (description !== undefined) product.description = description.trim();
+        if (prix !== undefined) product.prix = parseInt(prix);
+        if (prixOriginal !== undefined) product.prixOriginal = prixOriginal ? parseInt(prixOriginal) : undefined;
+        if (categorie !== undefined) product.categorie = categorie;
+        if (image !== undefined) product.image = image;
         if (stock !== undefined) product.stock = parseInt(stock);
-        if (categorie) product.categorie = categorie;
-        if (marque !== undefined) product.marque = marque.trim();
-        if (ingredients !== undefined) product.ingredients = ingredients.trim();
-        if (modeEmploi !== undefined) product.modeEmploi = modeEmploi.trim();
-        if (precautions !== undefined) product.precautions = precautions.trim();
-        if (actif !== undefined) product.actif = actif !== 'false';
-        if (enVedette !== undefined) product.enVedette = enVedette === 'true';
-        if (enPromotion !== undefined) product.enPromotion = enPromotion === 'true';
+        if (enPromotion !== undefined) product.enPromotion = Boolean(enPromotion);
+        if (enVedette !== undefined) product.enVedette = Boolean(enVedette);
+        if (marque !== undefined) product.marque = marque ? marque.trim() : undefined;
+        if (ingredients !== undefined) product.ingredients = ingredients ? ingredients.trim() : undefined;
+        if (modeEmploi !== undefined) product.modeEmploi = modeEmploi ? modeEmploi.trim() : undefined;
+        if (precautions !== undefined) product.precautions = precautions ? precautions.trim() : undefined;
+        if (actif !== undefined) product.actif = Boolean(actif);
         
-        // Handle promotion
-        if (prixOriginal !== undefined) {
-            if (prixOriginal && product.enPromotion) {
-                product.prixOriginal = parseFloat(prixOriginal);
-                if (product.prixOriginal > product.prix) {
-                    product.pourcentagePromotion = Math.round(
-                        ((product.prixOriginal - product.prix) / product.prixOriginal) * 100
-                    );
-                }
-            } else {
-                product.prixOriginal = null;
-                product.pourcentagePromotion = 0;
-            }
-        }
-        
-        // Handle image update
-        if (req.file) {
-            const imageBase64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-            product.image = imageBase64;
-            console.log('New image uploaded');
-        } else if (req.body.imageUrl) {
-            product.image = req.body.imageUrl;
+        // Recalculate promotion percentage
+        if (product.enPromotion && product.prixOriginal && product.prixOriginal > product.prix) {
+            product.pourcentagePromotion = Math.round((product.prixOriginal - product.prix) / product.prixOriginal * 100);
+        } else {
+            product.pourcentagePromotion = 0;
         }
         
         await product.save();
         
-        console.log('✅ Product updated:', product._id);
+        console.log('✅ Product updated:', product.nom);
         
         res.json({
             message: 'Produit mis à jour avec succès',
@@ -373,13 +353,14 @@ router.put('/products/:id', adminAuth, upload.single('image'), async (req, res) 
 });
 
 // @route   DELETE /api/admin/products/:id
-// @desc    Delete product
-// @access  Private (Admin only)
-router.delete('/products/:id', adminAuth, async (req, res) => {
+// @desc    Delete a product
+// @access  Private/Admin
+router.delete('/products/:id', async (req, res) => {
     try {
         console.log('🗑️ Deleting product:', req.params.id);
         
         const product = await Product.findById(req.params.id);
+        
         if (!product) {
             return res.status(404).json({
                 message: 'Produit non trouvé'
@@ -388,7 +369,7 @@ router.delete('/products/:id', adminAuth, async (req, res) => {
         
         await Product.findByIdAndDelete(req.params.id);
         
-        console.log('✅ Product deleted:', req.params.id);
+        console.log('✅ Product deleted:', product.nom);
         
         res.json({
             message: 'Produit supprimé avec succès'
@@ -404,37 +385,62 @@ router.delete('/products/:id', adminAuth, async (req, res) => {
 
 // @route   GET /api/admin/orders
 // @desc    Get all orders for admin
-// @access  Private (Admin only)
-router.get('/orders', adminAuth, async (req, res) => {
+// @access  Private/Admin
+router.get('/orders', async (req, res) => {
     try {
-        console.log('📋 Loading orders for admin...');
+        console.log('📋 Loading admin orders...');
         
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
+        const limit = parseInt(req.query.limit) || 50;
         const skip = (page - 1) * limit;
         
         let query = {};
         
+        // Filters
         if (req.query.statut) {
             query.statut = req.query.statut;
         }
         
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                const dateTo = new Date(req.query.dateTo);
+                dateTo.setHours(23, 59, 59, 999);
+                query.dateCommande.$lte = dateTo;
+            }
+        }
+        
+        if (req.query.search) {
+            query.$or = [
+                { numeroCommande: { $regex: req.query.search, $options: 'i' } },
+                { 'client.nom': { $regex: req.query.search, $options: 'i' } },
+                { 'client.prenom': { $regex: req.query.search, $options: 'i' } },
+                { 'client.email': { $regex: req.query.search, $options: 'i' } }
+            ];
+        }
+        
         const orders = await Order.find(query)
-            .populate('client', 'nom prenom email telephone adresse wilaya')
             .sort({ dateCommande: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .populate('client', 'nom prenom email telephone');
             
         const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
         
-        console.log(`✅ Loaded ${orders.length} orders for admin`);
+        console.log(`✅ Admin orders loaded: ${orders.length}`);
         
         res.json({
             orders,
             pagination: {
                 currentPage: page,
-                totalPages: Math.ceil(total / limit),
-                totalOrders: total
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
             }
         });
         
@@ -448,39 +454,49 @@ router.get('/orders', adminAuth, async (req, res) => {
 
 // @route   PUT /api/admin/orders/:id
 // @desc    Update order status
-// @access  Private (Admin only)
-router.put('/orders/:id', adminAuth, async (req, res) => {
+// @access  Private/Admin
+router.put('/orders/:id', async (req, res) => {
     try {
-        console.log('🔄 Updating order status:', req.params.id);
+        console.log('📝 Updating order:', req.params.id);
         
-        const { statut } = req.body;
+        const { statut, commentaires } = req.body;
         
-        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
-        if (!validStatuses.includes(statut)) {
+        if (!statut) {
+            return res.status(400).json({
+                message: 'Statut requis'
+            });
+        }
+        
+        const validStatuts = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
+        if (!validStatuts.includes(statut)) {
             return res.status(400).json({
                 message: 'Statut invalide'
             });
         }
         
         const order = await Order.findById(req.params.id);
+        
         if (!order) {
             return res.status(404).json({
                 message: 'Commande non trouvée'
             });
         }
         
+        // Update order
         order.statut = statut;
+        if (commentaires !== undefined) order.commentaires = commentaires;
         
+        // Set delivery date if delivered
         if (statut === 'livrée' && !order.dateLivraison) {
             order.dateLivraison = new Date();
         }
         
         await order.save();
         
-        console.log('✅ Order status updated:', order._id, 'to', statut);
+        console.log('✅ Order updated:', order.numeroCommande);
         
         res.json({
-            message: 'Statut de la commande mis à jour',
+            message: 'Commande mise à jour avec succès',
             order
         });
         
@@ -492,25 +508,60 @@ router.put('/orders/:id', adminAuth, async (req, res) => {
     }
 });
 
+// @route   GET /api/admin/orders/:id
+// @desc    Get order details
+// @access  Private/Admin
+router.get('/orders/:id', async (req, res) => {
+    try {
+        console.log('👁️ Getting order details:', req.params.id);
+        
+        const order = await Order.findById(req.params.id)
+            .populate('client', 'nom prenom email telephone adresse wilaya');
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        res.json(order);
+        
+    } catch (error) {
+        console.error('❌ Get order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération de la commande'
+        });
+    }
+});
+
 // @route   GET /api/admin/users
 // @desc    Get all users for admin
-// @access  Private (Admin only)
-router.get('/users', adminAuth, async (req, res) => {
+// @access  Private/Admin
+router.get('/users', async (req, res) => {
     try {
-        console.log('👥 Loading users for admin...');
+        console.log('👥 Loading admin users...');
         
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
+        const limit = parseInt(req.query.limit) || 50;
         const skip = (page - 1) * limit;
         
         let query = {};
         
+        // Filters
         if (req.query.actif !== undefined) {
             query.actif = req.query.actif === 'true';
         }
         
         if (req.query.role) {
             query.role = req.query.role;
+        }
+        
+        if (req.query.search) {
+            query.$or = [
+                { nom: { $regex: req.query.search, $options: 'i' } },
+                { prenom: { $regex: req.query.search, $options: 'i' } },
+                { email: { $regex: req.query.search, $options: 'i' } }
+            ];
         }
         
         const users = await User.find(query)
@@ -520,15 +571,18 @@ router.get('/users', adminAuth, async (req, res) => {
             .limit(limit);
             
         const total = await User.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
         
-        console.log(`✅ Loaded ${users.length} users for admin`);
+        console.log(`✅ Admin users loaded: ${users.length}`);
         
         res.json({
             users,
             pagination: {
                 currentPage: page,
-                totalPages: Math.ceil(total / limit),
-                totalUsers: total
+                totalPages,
+                totalUsers: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
             }
         });
         
@@ -536,6 +590,63 @@ router.get('/users', adminAuth, async (req, res) => {
         console.error('❌ Admin users error:', error);
         res.status(500).json({
             message: 'Erreur lors du chargement des utilisateurs'
+        });
+    }
+});
+
+// @route   PUT /api/admin/users/:id
+// @desc    Update user (toggle active status, change role)
+// @access  Private/Admin
+router.put('/users/:id', async (req, res) => {
+    try {
+        console.log('📝 Updating user:', req.params.id);
+        
+        const { actif, role } = req.body;
+        
+        const user = await User.findById(req.params.id);
+        
+        if (!user) {
+            return res.status(404).json({
+                message: 'Utilisateur non trouvé'
+            });
+        }
+        
+        // Don't allow deactivating the last admin
+        if (user.role === 'admin' && actif === false) {
+            const adminCount = await User.countDocuments({ role: 'admin', actif: true });
+            if (adminCount <= 1) {
+                return res.status(400).json({
+                    message: 'Impossible de désactiver le dernier administrateur'
+                });
+            }
+        }
+        
+        // Update fields
+        if (actif !== undefined) user.actif = Boolean(actif);
+        if (role !== undefined && ['user', 'admin'].includes(role)) {
+            user.role = role;
+        }
+        
+        await user.save();
+        
+        console.log('✅ User updated:', user.email);
+        
+        res.json({
+            message: 'Utilisateur mis à jour avec succès',
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                role: user.role,
+                actif: user.actif
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Update user error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de l\'utilisateur'
         });
     }
 });

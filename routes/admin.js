@@ -2,74 +2,116 @@ const express = require('express');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const User = require('../models/User');
-const Settings = require('../models/Settings');
-const { adminAuth } = require('../middleware/auth');
+const auth = require('../middleware/auth');
+const multer = require('multer');
+const path = require('path');
 
 const router = express.Router();
 
-// Apply admin auth middleware to all routes
-router.use(adminAuth);
+// Middleware pour vérifier les droits admin
+const adminAuth = async (req, res, next) => {
+    try {
+        await auth(req, res, () => {});
+        
+        const user = await User.findById(req.user.id);
+        if (!user || user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès refusé - Droits administrateur requis'
+            });
+        }
+        
+        next();
+    } catch (error) {
+        return res.status(401).json({
+            message: 'Token invalide'
+        });
+    }
+};
+
+// Configuration multer pour upload d'images
+const storage = multer.memoryStorage();
+const upload = multer({ 
+    storage: storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB max
+    },
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Seules les images sont autorisées'), false);
+        }
+    }
+});
 
 // @route   GET /api/admin/dashboard
-// @desc    Get admin dashboard stats
-// @access  Admin
-router.get('/dashboard', async (req, res) => {
+// @desc    Get admin dashboard statistics
+// @access  Private (Admin only)
+router.get('/dashboard', adminAuth, async (req, res) => {
     try {
-        console.log('📊 Loading admin dashboard stats...');
+        console.log('📊 Loading admin dashboard...');
         
-        // Get basic counts
-        const totalProducts = await Product.countDocuments({ actif: true });
+        // Statistiques produits
+        const totalProducts = await Product.countDocuments();
+        const activeProducts = await Product.countDocuments({ actif: true });
+        const featuredProducts = await Product.countDocuments({ enVedette: true });
+        const promotionProducts = await Product.countDocuments({ enPromotion: true });
+        
+        // Statistiques commandes
         const totalOrders = await Order.countDocuments();
-        const totalUsers = await User.countDocuments({ actif: true });
         const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
+        const confirmedOrders = await Order.countDocuments({ statut: 'confirmée' });
+        const deliveredOrders = await Order.countDocuments({ statut: 'livrée' });
         
-        // Get recent orders (last 30 days)
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        // Statistiques utilisateurs
+        const totalUsers = await User.countDocuments();
+        const activeUsers = await User.countDocuments({ actif: true });
         
-        const recentOrders = await Order.find({
-            dateCommande: { $gte: thirtyDaysAgo }
+        // Revenus du mois
+        const currentMonth = new Date();
+        const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+        const monthlyOrders = await Order.find({
+            dateCommande: { $gte: startOfMonth },
+            statut: { $in: ['confirmée', 'expédiée', 'livrée'] }
         });
         
-        // Calculate revenue
-        const monthlyRevenue = recentOrders.reduce((sum, order) => sum + order.total, 0);
-        const dailyRevenue = recentOrders
-            .filter(order => {
-                const today = new Date();
-                const orderDate = new Date(order.dateCommande);
-                return orderDate.toDateString() === today.toDateString();
-            })
-            .reduce((sum, order) => sum + order.total, 0);
+        const monthlyRevenue = monthlyOrders.reduce((sum, order) => sum + (order.total || 0), 0);
         
-        // Get top categories
-        const products = await Product.find({ actif: true });
-        const categoryStats = products.reduce((acc, product) => {
-            acc[product.categorie] = (acc[product.categorie] || 0) + 1;
-            return acc;
-        }, {});
-        
-        // Get low stock products
-        const lowStockProducts = await Product.find({
-            actif: true,
-            stock: { $lt: 5 }
+        // Produits avec stock faible
+        const lowStockProducts = await Product.find({ 
+            stock: { $lte: 5 }, 
+            actif: true 
         }).limit(10);
         
-        // Get recent activity (orders)
-        const recentActivity = await Order.find()
+        // Commandes récentes
+        const recentOrders = await Order.find()
             .sort({ dateCommande: -1 })
             .limit(5)
-            .populate('user', 'nom prenom email');
+            .populate('client', 'nom prenom email');
         
         const stats = {
-            totalProducts,
-            totalOrders,
-            totalUsers,
-            pendingOrders,
-            monthlyRevenue,
-            dailyRevenue,
-            categoryStats,
+            products: {
+                total: totalProducts,
+                active: activeProducts,
+                featured: featuredProducts,
+                promotions: promotionProducts
+            },
+            orders: {
+                total: totalOrders,
+                pending: pendingOrders,
+                confirmed: confirmedOrders,
+                delivered: deliveredOrders
+            },
+            users: {
+                total: totalUsers,
+                active: activeUsers
+            },
+            revenue: {
+                monthly: monthlyRevenue,
+                currency: 'DA'
+            },
             lowStockProducts,
-            recentActivity
+            recentOrders
         };
         
         console.log('✅ Dashboard stats loaded');
@@ -77,26 +119,32 @@ router.get('/dashboard', async (req, res) => {
         
     } catch (error) {
         console.error('❌ Dashboard error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors du chargement du tableau de bord' 
+        res.status(500).json({
+            message: 'Erreur lors du chargement du tableau de bord'
         });
     }
 });
 
 // @route   GET /api/admin/products
 // @desc    Get all products for admin
-// @access  Admin
-router.get('/products', async (req, res) => {
+// @access  Private (Admin only)
+router.get('/products', adminAuth, async (req, res) => {
     try {
+        console.log('📦 Loading all products for admin...');
+        
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
+        const limit = parseInt(req.query.limit) || 50;
         const skip = (page - 1) * limit;
         
         let query = {};
         
-        // Filters
+        // Filtres admin
         if (req.query.categorie) {
             query.categorie = req.query.categorie;
+        }
+        
+        if (req.query.actif !== undefined) {
+            query.actif = req.query.actif === 'true';
         }
         
         if (req.query.search) {
@@ -107,502 +155,116 @@ router.get('/products', async (req, res) => {
             ];
         }
         
-        if (req.query.stock) {
-            if (req.query.stock === 'low') {
-                query.stock = { $lt: 5 };
-            } else if (req.query.stock === 'out') {
-                query.stock = 0;
-            }
-        }
-        
-        if (req.query.status) {
-            query.actif = req.query.status === 'active';
-        }
-        
-        // Sort
-        let sort = {};
-        switch (req.query.sort) {
-            case 'name_asc':
-                sort.nom = 1;
-                break;
-            case 'name_desc':
-                sort.nom = -1;
-                break;
-            case 'price_asc':
-                sort.prix = 1;
-                break;
-            case 'price_desc':
-                sort.prix = -1;
-                break;
-            case 'stock_asc':
-                sort.stock = 1;
-                break;
-            case 'stock_desc':
-                sort.stock = -1;
-                break;
-            case 'newest':
-                sort.dateAjout = -1;
-                break;
-            default:
-                sort.dateAjout = -1;
-        }
-        
         const products = await Product.find(query)
-            .sort(sort)
+            .sort({ dateAjout: -1 })
             .skip(skip)
             .limit(limit);
             
         const total = await Product.countDocuments(query);
-        const totalPages = Math.ceil(total / limit);
+        
+        console.log(`✅ Loaded ${products.length} products for admin`);
         
         res.json({
             products,
             pagination: {
                 currentPage: page,
-                totalPages,
-                totalProducts: total,
-                hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
+                totalPages: Math.ceil(total / limit),
+                totalProducts: total
             }
         });
         
     } catch (error) {
         console.error('❌ Admin products error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des produits' 
+        res.status(500).json({
+            message: 'Erreur lors du chargement des produits'
         });
     }
 });
 
 // @route   POST /api/admin/products
 // @desc    Create new product
-// @access  Admin
-router.post('/products', async (req, res) => {
+// @access  Private (Admin only)
+router.post('/products', adminAuth, upload.single('image'), async (req, res) => {
     try {
-        console.log('🆕 Creating new product:', req.body.nom);
+        console.log('➕ Creating new product...');
+        console.log('Product data:', req.body);
         
+        const {
+            nom,
+            description,
+            prix,
+            prixOriginal,
+            stock,
+            categorie,
+            marque,
+            ingredients,
+            modeEmploi,
+            precautions,
+            enVedette,
+            enPromotion,
+            actif
+        } = req.body;
+        
+        // Validation
+        if (!nom || !description || !prix || !stock || !categorie) {
+            return res.status(400).json({
+                message: 'Champs obligatoires manquants'
+            });
+        }
+        
+        // Prepare product data
         const productData = {
-            ...req.body,
+            nom: nom.trim(),
+            description: description.trim(),
+            prix: parseFloat(prix),
+            stock: parseInt(stock),
+            categorie,
+            actif: actif !== 'false',
+            enVedette: enVedette === 'true',
+            enPromotion: enPromotion === 'true',
             dateAjout: new Date()
         };
         
+        // Optional fields
+        if (marque) productData.marque = marque.trim();
+        if (ingredients) productData.ingredients = ingredients.trim();
+        if (modeEmploi) productData.modeEmploi = modeEmploi.trim();
+        if (precautions) productData.precautions = precautions.trim();
+        
+        // Handle promotion
+        if (prixOriginal && productData.enPromotion) {
+            productData.prixOriginal = parseFloat(prixOriginal);
+            if (productData.prixOriginal > productData.prix) {
+                productData.pourcentagePromotion = Math.round(
+                    ((productData.prixOriginal - productData.prix) / productData.prixOriginal) * 100
+                );
+            }
+        }
+        
+        // Handle image
+        if (req.file) {
+            // Convert image to base64 for storage
+            const imageBase64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+            productData.image = imageBase64;
+            console.log('Image uploaded and converted to base64');
+        } else if (req.body.imageUrl) {
+            // Use provided image URL/base64
+            productData.image = req.body.imageUrl;
+        }
+        
+        // Create product
         const product = new Product(productData);
         await product.save();
         
         console.log('✅ Product created:', product._id);
+        
         res.status(201).json({
             message: 'Produit créé avec succès',
             product
         });
         
     } catch (error) {
-        console.error('❌ Product creation error:', error);
-        
-        if (error.name === 'ValidationError') {
-            const messages = Object.values(error.errors).map(err => err.message);
-            return res.status(400).json({
-                message: messages[0] || 'Données de produit invalides'
-            });
-        }
-        
-        res.status(500).json({ 
-            message: 'Erreur lors de la création du produit' 
-        });
-    }
-});
-
-// @route   PUT /api/admin/products/:id
-// @desc    Update product
-// @access  Admin
-router.put('/products/:id', async (req, res) => {
-    try {
-        console.log('📝 Updating product:', req.params.id);
-        
-        const product = await Product.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
-        
-        if (!product) {
-            return res.status(404).json({
-                message: 'Produit non trouvé'
-            });
-        }
-        
-        console.log('✅ Product updated:', product._id);
-        res.json({
-            message: 'Produit mis à jour avec succès',
-            product
-        });
-        
-    } catch (error) {
-        console.error('❌ Product update error:', error);
-        
-        if (error.name === 'ValidationError') {
-            const messages = Object.values(error.errors).map(err => err.message);
-            return res.status(400).json({
-                message: messages[0] || 'Données de produit invalides'
-            });
-        }
-        
-        res.status(500).json({ 
-            message: 'Erreur lors de la mise à jour du produit' 
-        });
-    }
-});
-
-// @route   DELETE /api/admin/products/:id
-// @desc    Delete product
-// @access  Admin
-router.delete('/products/:id', async (req, res) => {
-    try {
-        console.log('🗑️ Deleting product:', req.params.id);
-        
-        const product = await Product.findByIdAndDelete(req.params.id);
-        
-        if (!product) {
-            return res.status(404).json({
-                message: 'Produit non trouvé'
-            });
-        }
-        
-        console.log('✅ Product deleted:', product.nom);
-        res.json({
-            message: 'Produit supprimé avec succès'
-        });
-        
-    } catch (error) {
-        console.error('❌ Product deletion error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la suppression du produit' 
-        });
-    }
-});
-
-// @route   POST /api/admin/products/bulk-update
-// @desc    Bulk update products (featured, promotion, etc.)
-// @access  Admin
-router.post('/products/bulk-update', async (req, res) => {
-    try {
-        const { productIds, updates } = req.body;
-        
-        if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
-            return res.status(400).json({
-                message: 'Liste de produits requise'
-            });
-        }
-        
-        console.log(`📦 Bulk updating ${productIds.length} products:`, updates);
-        
-        const result = await Product.updateMany(
-            { _id: { $in: productIds } },
-            updates,
-            { runValidators: true }
-        );
-        
-        console.log('✅ Bulk update completed:', result);
-        res.json({
-            message: `${result.modifiedCount} produits mis à jour avec succès`,
-            modifiedCount: result.modifiedCount
-        });
-        
-    } catch (error) {
-        console.error('❌ Bulk update error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la mise à jour groupée' 
-        });
-    }
-});
-
-// @route   POST /api/admin/products/cleanup
-// @desc    Clean up unwanted products
-// @access  Admin
-router.post('/products/cleanup', async (req, res) => {
-    try {
-        const { criteria } = req.body;
-        
-        console.log('🧹 Starting product cleanup with criteria:', criteria);
-        
-        let deleteQuery = {};
-        
-        // Build delete query based on criteria
-        if (criteria.includeInactive) {
-            deleteQuery.actif = false;
-        }
-        
-        if (criteria.includeOutOfStock) {
-            deleteQuery.stock = 0;
-        }
-        
-        if (criteria.includeOldProducts && criteria.daysBefore) {
-            const cutoffDate = new Date();
-            cutoffDate.setDate(cutoffDate.getDate() - criteria.daysBefore);
-            deleteQuery.dateAjout = { $lt: cutoffDate };
-        }
-        
-        if (criteria.categories && criteria.categories.length > 0) {
-            deleteQuery.categorie = { $in: criteria.categories };
-        }
-        
-        if (criteria.priceRange) {
-            deleteQuery.prix = {};
-            if (criteria.priceRange.min !== undefined) {
-                deleteQuery.prix.$gte = criteria.priceRange.min;
-            }
-            if (criteria.priceRange.max !== undefined) {
-                deleteQuery.prix.$lte = criteria.priceRange.max;
-            }
-        }
-        
-        // Get products to be deleted for logging
-        const productsToDelete = await Product.find(deleteQuery);
-        console.log(`Found ${productsToDelete.length} products matching cleanup criteria`);
-        
-        if (productsToDelete.length === 0) {
-            return res.json({
-                message: 'Aucun produit trouvé correspondant aux critères',
-                deletedCount: 0,
-                deletedProducts: []
-            });
-        }
-        
-        // Delete products
-        const result = await Product.deleteMany(deleteQuery);
-        
-        console.log(`✅ Cleanup completed: ${result.deletedCount} products deleted`);
-        
-        res.json({
-            message: `${result.deletedCount} produits supprimés avec succès`,
-            deletedCount: result.deletedCount,
-            deletedProducts: productsToDelete.map(p => ({
-                id: p._id,
-                nom: p.nom,
-                categorie: p.categorie,
-                prix: p.prix,
-                stock: p.stock
-            }))
-        });
-        
-    } catch (error) {
-        console.error('❌ Product cleanup error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors du nettoyage des produits' 
-        });
-    }
-});
-
-// @route   GET /api/admin/orders
-// @desc    Get all orders for admin
-// @access  Admin
-router.get('/orders', async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
-        
-        // Filters
-        if (req.query.statut) {
-            query.statut = req.query.statut;
-        }
-        
-        if (req.query.search) {
-            query.$or = [
-                { numeroCommande: { $regex: req.query.search, $options: 'i' } },
-                { 'clientInfo.nom': { $regex: req.query.search, $options: 'i' } },
-                { 'clientInfo.telephone': { $regex: req.query.search, $options: 'i' } }
-            ];
-        }
-        
-        if (req.query.dateFrom || req.query.dateTo) {
-            query.dateCommande = {};
-            if (req.query.dateFrom) {
-                query.dateCommande.$gte = new Date(req.query.dateFrom);
-            }
-            if (req.query.dateTo) {
-                query.dateCommande.$lte = new Date(req.query.dateTo);
-            }
-        }
-        
-        // Sort
-        let sort = {};
-        switch (req.query.sort) {
-            case 'oldest':
-                sort.dateCommande = 1;
-                break;
-            case 'total_desc':
-                sort.total = -1;
-                break;
-            case 'total_asc':
-                sort.total = 1;
-                break;
-            default:
-                sort.dateCommande = -1;
-        }
-        
-        const orders = await Order.find(query)
-            .sort(sort)
-            .skip(skip)
-            .limit(limit)
-            .populate('user', 'nom prenom email')
-            .populate('produits.produit');
-            
-        const total = await Order.countDocuments(query);
-        const totalPages = Math.ceil(total / limit);
-        
-        res.json({
-            orders,
-            pagination: {
-                currentPage: page,
-                totalPages,
-                totalOrders: total,
-                hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Admin orders error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des commandes' 
-        });
-    }
-});
-
-// @route   PUT /api/admin/orders/:id/status
-// @desc    Update order status
-// @access  Admin
-router.put('/orders/:id/status', async (req, res) => {
-    try {
-        const { statut, notes } = req.body;
-        
-        const validStatuses = ['en-attente', 'confirmée', 'expédiée', 'livrée', 'annulée'];
-        
-        if (!validStatuses.includes(statut)) {
-            return res.status(400).json({
-                message: 'Statut invalide'
-            });
-        }
-        
-        const order = await Order.findByIdAndUpdate(
-            req.params.id,
-            { 
-                statut, 
-                notes: notes || '',
-                dateModification: new Date() 
-            },
-            { new: true }
-        ).populate('user', 'nom prenom email');
-        
-        if (!order) {
-            return res.status(404).json({
-                message: 'Commande non trouvée'
-            });
-        }
-        
-        console.log(`✅ Order ${order.numeroCommande} status updated to: ${statut}`);
-        
-        res.json({
-            message: 'Statut de commande mis à jour avec succès',
-            order
-        });
-        
-    } catch (error) {
-        console.error('❌ Order status update error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la mise à jour du statut' 
-        });
-    }
-});
-
-// @route   GET /api/admin/users
-// @desc    Get all users for admin
-// @access  Admin
-router.get('/users', async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
-        
-        if (req.query.search) {
-            query.$or = [
-                { nom: { $regex: req.query.search, $options: 'i' } },
-                { prenom: { $regex: req.query.search, $options: 'i' } },
-                { email: { $regex: req.query.search, $options: 'i' } },
-                { telephone: { $regex: req.query.search, $options: 'i' } }
-            ];
-        }
-        
-        if (req.query.role) {
-            query.role = req.query.role;
-        }
-        
-        if (req.query.wilaya) {
-            query.wilaya = req.query.wilaya;
-        }
-        
-        const users = await User.find(query)
-            .sort({ dateInscription: -1 })
-            .skip(skip)
-            .limit(limit);
-            
-        const total = await User.countDocuments(query);
-        const totalPages = Math.ceil(total / limit);
-        
-        res.json({
-            users,
-            pagination: {
-                currentPage: page,
-                totalPages,
-                totalUsers: total,
-                hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Admin users error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des utilisateurs' 
-        });
-    }
-});
-
-// @route   GET /api/admin/settings
-// @desc    Get site settings
-// @access  Admin
-router.get('/settings', async (req, res) => {
-    try {
-        const settings = await Settings.getSettings();
-        res.json(settings);
-        
-    } catch (error) {
-        console.error('❌ Settings error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des paramètres' 
-        });
-    }
-});
-
-// @route   PUT /api/admin/settings
-// @desc    Update site settings
-// @access  Admin
-router.put('/settings', async (req, res) => {
-    try {
-        const settings = await Settings.getSettings();
-        await settings.updateSettings(req.body, req.user.id);
-        
-        res.json({
-            message: 'Paramètres mis à jour avec succès',
-            settings
-        });
-        
-    } catch (error) {
-        console.error('❌ Settings update error:', error);
+        console.error('❌ Create product error:', error);
         
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
@@ -611,8 +273,269 @@ router.put('/settings', async (req, res) => {
             });
         }
         
-        res.status(500).json({ 
-            message: 'Erreur lors de la mise à jour des paramètres' 
+        res.status(500).json({
+            message: 'Erreur lors de la création du produit'
+        });
+    }
+});
+
+// @route   PUT /api/admin/products/:id
+// @desc    Update product
+// @access  Private (Admin only)
+router.put('/products/:id', adminAuth, upload.single('image'), async (req, res) => {
+    try {
+        console.log('🔄 Updating product:', req.params.id);
+        
+        const product = await Product.findById(req.params.id);
+        if (!product) {
+            return res.status(404).json({
+                message: 'Produit non trouvé'
+            });
+        }
+        
+        const {
+            nom,
+            description,
+            prix,
+            prixOriginal,
+            stock,
+            categorie,
+            marque,
+            ingredients,
+            modeEmploi,
+            precautions,
+            enVedette,
+            enPromotion,
+            actif
+        } = req.body;
+        
+        // Update fields
+        if (nom) product.nom = nom.trim();
+        if (description) product.description = description.trim();
+        if (prix !== undefined) product.prix = parseFloat(prix);
+        if (stock !== undefined) product.stock = parseInt(stock);
+        if (categorie) product.categorie = categorie;
+        if (marque !== undefined) product.marque = marque.trim();
+        if (ingredients !== undefined) product.ingredients = ingredients.trim();
+        if (modeEmploi !== undefined) product.modeEmploi = modeEmploi.trim();
+        if (precautions !== undefined) product.precautions = precautions.trim();
+        if (actif !== undefined) product.actif = actif !== 'false';
+        if (enVedette !== undefined) product.enVedette = enVedette === 'true';
+        if (enPromotion !== undefined) product.enPromotion = enPromotion === 'true';
+        
+        // Handle promotion
+        if (prixOriginal !== undefined) {
+            if (prixOriginal && product.enPromotion) {
+                product.prixOriginal = parseFloat(prixOriginal);
+                if (product.prixOriginal > product.prix) {
+                    product.pourcentagePromotion = Math.round(
+                        ((product.prixOriginal - product.prix) / product.prixOriginal) * 100
+                    );
+                }
+            } else {
+                product.prixOriginal = null;
+                product.pourcentagePromotion = 0;
+            }
+        }
+        
+        // Handle image update
+        if (req.file) {
+            const imageBase64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+            product.image = imageBase64;
+            console.log('New image uploaded');
+        } else if (req.body.imageUrl) {
+            product.image = req.body.imageUrl;
+        }
+        
+        await product.save();
+        
+        console.log('✅ Product updated:', product._id);
+        
+        res.json({
+            message: 'Produit mis à jour avec succès',
+            product
+        });
+        
+    } catch (error) {
+        console.error('❌ Update product error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données invalides'
+            });
+        }
+        
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour du produit'
+        });
+    }
+});
+
+// @route   DELETE /api/admin/products/:id
+// @desc    Delete product
+// @access  Private (Admin only)
+router.delete('/products/:id', adminAuth, async (req, res) => {
+    try {
+        console.log('🗑️ Deleting product:', req.params.id);
+        
+        const product = await Product.findById(req.params.id);
+        if (!product) {
+            return res.status(404).json({
+                message: 'Produit non trouvé'
+            });
+        }
+        
+        await Product.findByIdAndDelete(req.params.id);
+        
+        console.log('✅ Product deleted:', req.params.id);
+        
+        res.json({
+            message: 'Produit supprimé avec succès'
+        });
+        
+    } catch (error) {
+        console.error('❌ Delete product error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la suppression du produit'
+        });
+    }
+});
+
+// @route   GET /api/admin/orders
+// @desc    Get all orders for admin
+// @access  Private (Admin only)
+router.get('/orders', adminAuth, async (req, res) => {
+    try {
+        console.log('📋 Loading orders for admin...');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        const orders = await Order.find(query)
+            .populate('client', 'nom prenom email telephone adresse wilaya')
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        
+        console.log(`✅ Loaded ${orders.length} orders for admin`);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages: Math.ceil(total / limit),
+                totalOrders: total
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Admin orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors du chargement des commandes'
+        });
+    }
+});
+
+// @route   PUT /api/admin/orders/:id
+// @desc    Update order status
+// @access  Private (Admin only)
+router.put('/orders/:id', adminAuth, async (req, res) => {
+    try {
+        console.log('🔄 Updating order status:', req.params.id);
+        
+        const { statut } = req.body;
+        
+        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
+        if (!validStatuses.includes(statut)) {
+            return res.status(400).json({
+                message: 'Statut invalide'
+            });
+        }
+        
+        const order = await Order.findById(req.params.id);
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        order.statut = statut;
+        
+        if (statut === 'livrée' && !order.dateLivraison) {
+            order.dateLivraison = new Date();
+        }
+        
+        await order.save();
+        
+        console.log('✅ Order status updated:', order._id, 'to', statut);
+        
+        res.json({
+            message: 'Statut de la commande mis à jour',
+            order
+        });
+        
+    } catch (error) {
+        console.error('❌ Update order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de la commande'
+        });
+    }
+});
+
+// @route   GET /api/admin/users
+// @desc    Get all users for admin
+// @access  Private (Admin only)
+router.get('/users', adminAuth, async (req, res) => {
+    try {
+        console.log('👥 Loading users for admin...');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        if (req.query.actif !== undefined) {
+            query.actif = req.query.actif === 'true';
+        }
+        
+        if (req.query.role) {
+            query.role = req.query.role;
+        }
+        
+        const users = await User.find(query)
+            .select('-password')
+            .sort({ dateInscription: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await User.countDocuments(query);
+        
+        console.log(`✅ Loaded ${users.length} users for admin`);
+        
+        res.json({
+            users,
+            pagination: {
+                currentPage: page,
+                totalPages: Math.ceil(total / limit),
+                totalUsers: total
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Admin users error:', error);
+        res.status(500).json({
+            message: 'Erreur lors du chargement des utilisateurs'
         });
     }
 });

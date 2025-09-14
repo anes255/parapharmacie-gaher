@@ -1,46 +1,39 @@
 const express = require('express');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
-const User = require('../models/User');
 const auth = require('../middleware/auth');
 
 const router = express.Router();
 
 // @route   POST /api/orders
-// @desc    Create new order
-// @access  Public/Private
+// @desc    Create a new order
+// @access  Public
 router.post('/', async (req, res) => {
     try {
-        console.log('📦 Creating new order...');
-        console.log('Order data:', req.body);
+        console.log('📝 Creating new order...');
         
         const {
             client,
             articles,
-            sousTotal,
             fraisLivraison,
-            total,
+            remise,
+            codePromo,
             modePaiement,
             commentaires,
-            adresseLivraison
+            livraison,
+            newsletter
         } = req.body;
         
         // Validation
-        if (!client || !client.nom || !client.prenom || !client.email || !client.telephone) {
+        if (!client || !client.nom || !client.prenom || !client.email || !client.telephone || !client.adresse || !client.wilaya) {
             return res.status(400).json({
-                message: 'Informations client manquantes'
+                message: 'Informations client incomplètes'
             });
         }
         
-        if (!articles || articles.length === 0) {
+        if (!articles || !Array.isArray(articles) || articles.length === 0) {
             return res.status(400).json({
-                message: 'Aucun article dans la commande'
-            });
-        }
-        
-        if (!sousTotal || !total) {
-            return res.status(400).json({
-                message: 'Montants manquants'
+                message: 'Au moins un article est requis'
             });
         }
         
@@ -52,118 +45,113 @@ router.post('/', async (req, res) => {
             });
         }
         
-        // Validate articles and check stock
-        for (let article of articles) {
-            if (!article.productId || !article.nom || !article.prix || !article.quantite) {
+        // Validate articles and calculate totals
+        let sousTotal = 0;
+        const validatedArticles = [];
+        
+        for (const article of articles) {
+            if (!article.id || !article.nom || !article.prix || !article.quantite) {
                 return res.status(400).json({
-                    message: 'Informations article manquantes'
+                    message: 'Informations article incomplètes'
                 });
             }
             
-            // Check if product exists and has enough stock
-            try {
-                const product = await Product.findById(article.productId);
-                if (!product) {
-                    return res.status(400).json({
-                        message: `Produit non trouvé: ${article.nom}`
-                    });
-                }
-                
-                if (product.stock < article.quantite) {
-                    return res.status(400).json({
-                        message: `Stock insuffisant pour ${product.nom}. Disponible: ${product.stock}, Demandé: ${article.quantite}`
-                    });
-                }
-                
-                if (!product.actif) {
-                    return res.status(400).json({
-                        message: `Produit non disponible: ${product.nom}`
-                    });
-                }
-                
-            } catch (error) {
-                console.log('Product validation skipped (product not in DB)');
+            if (article.prix < 0 || article.quantite < 1) {
+                return res.status(400).json({
+                    message: 'Prix ou quantité invalide'
+                });
             }
+            
+            // Try to find product in database to verify stock
+            try {
+                const product = await Product.findById(article.id);
+                if (product) {
+                    if (product.stock < article.quantite) {
+                        return res.status(400).json({
+                            message: `Stock insuffisant pour ${product.nom}. Stock disponible: ${product.stock}`
+                        });
+                    }
+                    
+                    // Verify price matches
+                    if (Math.abs(product.prix - article.prix) > 0.01) {
+                        console.log(`Price mismatch for ${product.nom}: expected ${product.prix}, got ${article.prix}`);
+                    }
+                }
+            } catch (error) {
+                console.log('Product verification skipped:', error.message);
+            }
+            
+            const articleSousTotal = article.prix * article.quantite;
+            sousTotal += articleSousTotal;
+            
+            validatedArticles.push({
+                id: article.id,
+                nom: article.nom,
+                prix: article.prix,
+                quantite: article.quantite,
+                sousTotal: articleSousTotal,
+                image: article.image || undefined,
+                categorie: article.categorie || undefined,
+                marque: article.marque || undefined
+            });
         }
         
-        // Generate order number
-        const numeroCommande = 'CMD' + Date.now().toString().slice(-8) + Math.floor(Math.random() * 100).toString().padStart(2, '0');
+        // Calculate delivery fees
+        const calculatedFraisLivraison = fraisLivraison !== undefined ? fraisLivraison : (sousTotal >= 5000 ? 0 : 300);
         
-        // Find or create user
-        let user = null;
-        try {
-            user = await User.findOne({ email: client.email.toLowerCase() });
-            if (!user) {
-                // Create guest user
-                user = new User({
-                    nom: client.nom,
-                    prenom: client.prenom,
-                    email: client.email.toLowerCase(),
-                    telephone: client.telephone,
-                    adresse: client.adresse || '',
-                    ville: client.ville || '',
-                    wilaya: client.wilaya || '',
-                    role: 'client',
-                    actif: true,
-                    password: 'temporary_' + Date.now() // Temporary password for guest users
-                });
-                await user.save();
-                console.log('Guest user created:', user.email);
-            }
-        } catch (error) {
-            console.log('User creation/lookup failed, continuing without user link');
+        // Calculate total
+        const total = sousTotal + calculatedFraisLivraison - (remise || 0);
+        
+        if (total < 0) {
+            return res.status(400).json({
+                message: 'Total de commande invalide'
+            });
         }
         
         // Create order
-        const orderData = {
-            numeroCommande,
+        const order = new Order({
             client: {
                 nom: client.nom.trim(),
                 prenom: client.prenom.trim(),
                 email: client.email.toLowerCase().trim(),
-                telephone: client.telephone.replace(/\s+/g, ''),
-                adresse: client.adresse ? client.adresse.trim() : '',
-                ville: client.ville ? client.ville.trim() : '',
-                wilaya: client.wilaya || '',
-                codePostal: client.codePostal ? client.codePostal.trim() : ''
+                telephone: client.telephone.trim(),
+                adresse: client.adresse.trim(),
+                ville: client.ville ? client.ville.trim() : undefined,
+                wilaya: client.wilaya,
+                codePostal: client.codePostal ? client.codePostal.trim() : undefined
             },
-            articles: articles.map(article => ({
-                productId: article.productId,
-                nom: article.nom,
-                prix: parseFloat(article.prix),
-                quantite: parseInt(article.quantite),
-                image: article.image || '',
-                categorie: article.categorie || ''
-            })),
-            sousTotal: parseFloat(sousTotal),
-            fraisLivraison: parseFloat(fraisLivraison) || 0,
-            total: parseFloat(total),
-            statut: 'en-attente',
+            articles: validatedArticles,
+            sousTotal,
+            fraisLivraison: calculatedFraisLivraison,
+            remise: remise || 0,
+            codePromo: codePromo ? codePromo.trim().toUpperCase() : undefined,
+            total,
             modePaiement: modePaiement || 'Paiement à la livraison',
-            commentaires: commentaires ? commentaires.trim() : '',
-            adresseLivraison: adresseLivraison || client.adresse,
-            dateCommande: new Date(),
-            utilisateur: user ? user._id : null
-        };
+            commentaires: commentaires ? commentaires.trim() : undefined,
+            livraison: livraison || undefined,
+            newsletter: Boolean(newsletter),
+            dateCommande: new Date()
+        });
         
-        const order = new Order(orderData);
+        // Add initial history entry
+        order.addToHistory('Commande créée', null, 'Nouvelle commande reçue');
+        
         await order.save();
         
         // Update product stock
-        for (let article of articles) {
+        for (const article of validatedArticles) {
             try {
                 await Product.findByIdAndUpdate(
-                    article.productId,
+                    article.id,
                     { $inc: { stock: -article.quantite } },
                     { new: true }
                 );
-                console.log(`Stock updated for product ${article.productId}: -${article.quantite}`);
             } catch (error) {
-                console.log(`Stock update failed for product ${article.productId}:`, error.message);
+                console.log(`Stock update skipped for ${article.nom}:`, error.message);
             }
         }
         
-        console.log('✅ Order created successfully:', numeroCommande);
+        console.log('✅ Order created:', order.numeroCommande);
         
         res.status(201).json({
             message: 'Commande créée avec succès',
@@ -194,52 +182,17 @@ router.post('/', async (req, res) => {
 
 // @route   GET /api/orders/:id
 // @desc    Get order by ID
-// @access  Public (with order number) / Private
+// @access  Public (for order confirmation)
 router.get('/:id', async (req, res) => {
     try {
-        console.log('📋 Getting order:', req.params.id);
+        console.log('👁️ Getting order:', req.params.id);
         
-        let query;
-        if (req.params.id.startsWith('CMD')) {
-            // Search by order number
-            query = { numeroCommande: req.params.id };
-        } else {
-            // Search by MongoDB ID
-            query = { _id: req.params.id };
-        }
-        
-        const order = await Order.findOne(query)
-            .populate('utilisateur', 'nom prenom email telephone');
+        const order = await Order.findById(req.params.id);
         
         if (!order) {
             return res.status(404).json({
                 message: 'Commande non trouvée'
             });
-        }
-        
-        // If user is authenticated, check if they own this order
-        if (req.headers['x-auth-token']) {
-            try {
-                const auth = require('../middleware/auth');
-                await auth(req, res, () => {});
-                
-                if (req.user) {
-                    const user = await User.findById(req.user.id);
-                    
-                    // Only allow access if user owns the order or is admin
-                    if (user.role !== 'admin' && 
-                        order.utilisateur && 
-                        order.utilisateur._id.toString() !== req.user.id &&
-                        order.client.email !== user.email) {
-                        return res.status(403).json({
-                            message: 'Accès refusé'
-                        });
-                    }
-                }
-            } catch (authError) {
-                // If auth fails, continue (public access by order number)
-                console.log('Auth failed, allowing public access');
-            }
         }
         
         res.json(order);
@@ -252,29 +205,65 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-// @route   GET /api/orders/user/all
-// @desc    Get all orders for authenticated user
-// @access  Private
-router.get('/user/all', auth, async (req, res) => {
+// @route   GET /api/orders/track/:numeroCommande
+// @desc    Track order by order number
+// @access  Public
+router.get('/track/:numeroCommande', async (req, res) => {
     try {
-        console.log('📋 Getting user orders for:', req.user.id);
+        console.log('📦 Tracking order:', req.params.numeroCommande);
         
-        const user = await User.findById(req.user.id);
-        if (!user) {
+        const order = await Order.findOne({ numeroCommande: req.params.numeroCommande });
+        
+        if (!order) {
             return res.status(404).json({
-                message: 'Utilisateur non trouvé'
+                message: 'Commande non trouvée'
             });
         }
         
-        // Find orders by user ID or email
-        const orders = await Order.find({
-            $or: [
-                { utilisateur: req.user.id },
-                { 'client.email': user.email }
-            ]
-        }).sort({ dateCommande: -1 });
+        // Return limited information for tracking
+        res.json({
+            numeroCommande: order.numeroCommande,
+            statut: order.statut,
+            dateCommande: order.dateCommande,
+            dateConfirmation: order.dateConfirmation,
+            datePreparation: order.datePreparation,
+            dateExpedition: order.dateExpedition,
+            dateLivraison: order.dateLivraison,
+            transporteur: order.transporteur,
+            historique: order.historique.map(h => ({
+                action: h.action,
+                date: h.date
+            }))
+        });
         
-        console.log(`✅ Found ${orders.length} orders for user`);
+    } catch (error) {
+        console.error('❌ Track order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors du suivi de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders/user/:email
+// @desc    Get orders by user email
+// @access  Public (with email verification)
+router.get('/user/:email', async (req, res) => {
+    try {
+        console.log('👤 Getting user orders:', req.params.email);
+        
+        const { email } = req.params;
+        
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({
+                message: 'Format d\'email invalide'
+            });
+        }
+        
+        const orders = await Order.find({ 'client.email': email.toLowerCase() })
+            .sort({ dateCommande: -1 })
+            .limit(50);
         
         res.json({
             orders,
@@ -289,268 +278,64 @@ router.get('/user/all', auth, async (req, res) => {
     }
 });
 
-// @route   PUT /api/orders/:id
-// @desc    Update order (admin only)
-// @access  Private (Admin)
-router.put('/:id', auth, async (req, res) => {
+// @route   PUT /api/orders/:id/cancel
+// @desc    Cancel an order
+// @access  Public (with validation)
+router.put('/:id/cancel', async (req, res) => {
     try {
-        console.log('🔄 Updating order:', req.params.id);
+        console.log('❌ Cancelling order:', req.params.id);
         
-        const user = await User.findById(req.user.id);
-        if (!user || user.role !== 'admin') {
-            return res.status(403).json({
-                message: 'Accès refusé - Droits administrateur requis'
-            });
-        }
+        const { email, reason } = req.body;
         
-        const { statut, commentaires, adresseLivraison } = req.body;
-        
-        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
-        if (statut && !validStatuses.includes(statut)) {
+        if (!email) {
             return res.status(400).json({
-                message: 'Statut invalide'
+                message: 'Email requis pour annuler la commande'
             });
         }
         
         const order = await Order.findById(req.params.id);
+        
         if (!order) {
             return res.status(404).json({
                 message: 'Commande non trouvée'
             });
         }
         
-        // Update fields
-        if (statut) {
-            order.statut = statut;
-            
-            // Set delivery date when status is set to delivered
-            if (statut === 'livrée' && !order.dateLivraison) {
-                order.dateLivraison = new Date();
-            }
-            
-            // Clear delivery date if status is changed from delivered
-            if (statut !== 'livrée') {
-                order.dateLivraison = null;
-            }
-        }
-        
-        if (commentaires !== undefined) {
-            order.commentaires = commentaires.trim();
-        }
-        
-        if (adresseLivraison !== undefined) {
-            order.adresseLivraison = adresseLivraison.trim();
-        }
-        
-        await order.save();
-        
-        console.log('✅ Order updated:', order.numeroCommande);
-        
-        res.json({
-            message: 'Commande mise à jour avec succès',
-            order
-        });
-        
-    } catch (error) {
-        console.error('❌ Update order error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la mise à jour de la commande'
-        });
-    }
-});
-
-// @route   GET /api/orders
-// @desc    Get all orders (admin only) or user orders
-// @access  Private
-router.get('/', auth, async (req, res) => {
-    try {
-        console.log('📋 Getting orders...');
-        
-        const user = await User.findById(req.user.id);
-        if (!user) {
-            return res.status(404).json({
-                message: 'Utilisateur non trouvé'
-            });
-        }
-        
-        let query = {};
-        let isAdmin = user.role === 'admin';
-        
-        if (!isAdmin) {
-            // Non-admin users only see their own orders
-            query = {
-                $or: [
-                    { utilisateur: req.user.id },
-                    { 'client.email': user.email }
-                ]
-            };
-        }
-        
-        // Apply filters (admin only)
-        if (isAdmin) {
-            if (req.query.statut) {
-                query.statut = req.query.statut;
-            }
-            
-            if (req.query.dateDebut || req.query.dateFin) {
-                query.dateCommande = {};
-                if (req.query.dateDebut) {
-                    query.dateCommande.$gte = new Date(req.query.dateDebut);
-                }
-                if (req.query.dateFin) {
-                    query.dateCommande.$lte = new Date(req.query.dateFin);
-                }
-            }
-        }
-        
-        // Pagination
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
-        const skip = (page - 1) * limit;
-        
-        const orders = await Order.find(query)
-            .populate('utilisateur', 'nom prenom email telephone')
-            .sort({ dateCommande: -1 })
-            .skip(skip)
-            .limit(limit);
-            
-        const total = await Order.countDocuments(query);
-        
-        console.log(`✅ Found ${orders.length} orders`);
-        
-        res.json({
-            orders,
-            pagination: {
-                currentPage: page,
-                totalPages: Math.ceil(total / limit),
-                totalOrders: total,
-                hasNextPage: page < Math.ceil(total / limit),
-                hasPrevPage: page > 1
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Get orders error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des commandes'
-        });
-    }
-});
-
-// @route   DELETE /api/orders/:id
-// @desc    Delete order (admin only)
-// @access  Private (Admin)
-router.delete('/:id', auth, async (req, res) => {
-    try {
-        console.log('🗑️ Deleting order:', req.params.id);
-        
-        const user = await User.findById(req.user.id);
-        if (!user || user.role !== 'admin') {
+        // Verify email matches
+        if (order.client.email.toLowerCase() !== email.toLowerCase()) {
             return res.status(403).json({
-                message: 'Accès refusé - Droits administrateur requis'
-            });
-        }
-        
-        const order = await Order.findById(req.params.id);
-        if (!order) {
-            return res.status(404).json({
-                message: 'Commande non trouvée'
-            });
-        }
-        
-        // Restore product stock if order is being deleted
-        if (order.statut !== 'annulée') {
-            for (let article of order.articles) {
-                try {
-                    await Product.findByIdAndUpdate(
-                        article.productId,
-                        { $inc: { stock: article.quantite } },
-                        { new: true }
-                    );
-                    console.log(`Stock restored for product ${article.productId}: +${article.quantite}`);
-                } catch (error) {
-                    console.log(`Stock restoration failed for product ${article.productId}`);
-                }
-            }
-        }
-        
-        await Order.findByIdAndDelete(req.params.id);
-        
-        console.log('✅ Order deleted:', order.numeroCommande);
-        
-        res.json({
-            message: 'Commande supprimée avec succès'
-        });
-        
-    } catch (error) {
-        console.error('❌ Delete order error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la suppression de la commande'
-        });
-    }
-});
-
-// @route   POST /api/orders/:id/cancel
-// @desc    Cancel order
-// @access  Private (Owner or Admin)
-router.post('/:id/cancel', auth, async (req, res) => {
-    try {
-        console.log('❌ Canceling order:', req.params.id);
-        
-        const user = await User.findById(req.user.id);
-        if (!user) {
-            return res.status(404).json({
-                message: 'Utilisateur non trouvé'
-            });
-        }
-        
-        const order = await Order.findById(req.params.id);
-        if (!order) {
-            return res.status(404).json({
-                message: 'Commande non trouvée'
-            });
-        }
-        
-        // Check if user can cancel this order
-        const canCancel = user.role === 'admin' || 
-                         (order.utilisateur && order.utilisateur.toString() === req.user.id) ||
-                         order.client.email === user.email;
-        
-        if (!canCancel) {
-            return res.status(403).json({
-                message: 'Vous ne pouvez pas annuler cette commande'
+                message: 'Non autorisé à annuler cette commande'
             });
         }
         
         // Check if order can be cancelled
-        if (order.statut === 'livrée') {
+        if (!order.canBeCancelled()) {
             return res.status(400).json({
-                message: 'Impossible d\'annuler une commande déjà livrée'
+                message: 'Cette commande ne peut plus être annulée'
             });
         }
         
-        if (order.statut === 'annulée') {
-            return res.status(400).json({
-                message: 'Cette commande est déjà annulée'
-            });
-        }
-        
-        // Cancel the order
+        // Cancel order
         order.statut = 'annulée';
         order.dateAnnulation = new Date();
+        order.addToHistory(
+            'Commande annulée par le client',
+            email,
+            reason ? `Raison: ${reason}` : 'Annulation sans raison spécifiée'
+        );
+        
         await order.save();
         
         // Restore product stock
-        for (let article of order.articles) {
+        for (const article of order.articles) {
             try {
                 await Product.findByIdAndUpdate(
-                    article.productId,
+                    article.id,
                     { $inc: { stock: article.quantite } },
                     { new: true }
                 );
-                console.log(`Stock restored for product ${article.productId}: +${article.quantite}`);
             } catch (error) {
-                console.log(`Stock restoration failed for product ${article.productId}`);
+                console.log(`Stock restoration skipped for ${article.nom}:`, error.message);
             }
         }
         
@@ -558,13 +343,107 @@ router.post('/:id/cancel', auth, async (req, res) => {
         
         res.json({
             message: 'Commande annulée avec succès',
-            order
+            order: {
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                dateAnnulation: order.dateAnnulation
+            }
         });
         
     } catch (error) {
         console.error('❌ Cancel order error:', error);
         res.status(500).json({
             message: 'Erreur lors de l\'annulation de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders (with auth)
+// @desc    Get user's orders (authenticated)
+// @access  Private
+router.get('/', auth, async (req, res) => {
+    try {
+        console.log('📋 Getting authenticated user orders:', req.user.email);
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = { 'client.email': req.user.email };
+        
+        // Status filter
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Date range filter
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                const dateTo = new Date(req.query.dateTo);
+                dateTo.setHours(23, 59, 59, 999);
+                query.dateCommande.$lte = dateTo;
+            }
+        }
+        
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get authenticated orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
+        });
+    }
+});
+
+// @route   GET /api/orders/stats/revenue
+// @desc    Get revenue statistics
+// @access  Public (for demo purposes)
+router.get('/stats/revenue', async (req, res) => {
+    try {
+        console.log('📊 Getting revenue stats...');
+        
+        const startDate = req.query.startDate ? new Date(req.query.startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
+        
+        const stats = await Order.getRevenueStats(startDate, endDate);
+        
+        res.json({
+            stats: stats[0] || {
+                totalRevenue: 0,
+                totalOrders: 0,
+                averageOrderValue: 0
+            },
+            period: {
+                startDate,
+                endDate
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Revenue stats error:', error);
+        res.status(500).json({
+            message: 'Erreur lors du calcul des statistiques'
         });
     }
 });

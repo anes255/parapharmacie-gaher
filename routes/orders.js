@@ -1,18 +1,15 @@
 const express = require('express');
+const Order = require('../models/Order');
+const auth = require('../middleware/auth');
+
 const router = express.Router();
 
-// Simple Order storage (in-memory for now - will work immediately)
-let orders = [];
-
-// Helper function to generate order ID
-function generateOrderId() {
-    return 'order_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-}
-
-// Create new order (PUBLIC - no auth required for checkout)
+// @route   POST /api/orders
+// @desc    Create new order
+// @access  Public
 router.post('/', async (req, res) => {
     try {
-        console.log('📦 Creating new order:', req.body.numeroCommande);
+        console.log('📦 New order creation:', req.body);
         
         const {
             numeroCommande,
@@ -21,289 +18,750 @@ router.post('/', async (req, res) => {
             sousTotal,
             fraisLivraison,
             total,
-            statut,
             modePaiement,
-            dateCommande,
             commentaires
         } = req.body;
         
         // Validation
         if (!numeroCommande || !client || !articles || articles.length === 0) {
-            return res.status(400).json({ 
-                success: false,
-                message: 'Données de commande incomplètes' 
+            return res.status(400).json({
+                message: 'Données de commande incomplètes'
             });
         }
         
-        // Validate client data
         if (!client.prenom || !client.nom || !client.email || !client.telephone || !client.adresse || !client.wilaya) {
-            return res.status(400).json({ 
-                success: false,
-                message: 'Informations client incomplètes' 
+            return res.status(400).json({
+                message: 'Informations client incomplètes'
             });
         }
         
-        // Check if order already exists
-        const existingOrder = orders.find(o => o.numeroCommande === numeroCommande);
-        if (existingOrder) {
-            console.log('⚠️ Order already exists:', numeroCommande);
-            return res.status(400).json({ 
-                success: false,
-                message: 'Cette commande existe déjà' 
-            });
-        }
-        
-        // Create order object
-        const newOrder = {
-            _id: generateOrderId(),
+        // Create order
+        const order = new Order({
             numeroCommande,
             client: {
+                userId: req.user ? req.user.id : null,
                 prenom: client.prenom.trim(),
                 nom: client.nom.trim(),
-                email: client.email.trim().toLowerCase(),
-                telephone: client.telephone.trim(),
+                email: client.email.toLowerCase().trim(),
+                telephone: client.telephone.replace(/\s+/g, ''),
                 adresse: client.adresse.trim(),
-                wilaya: client.wilaya.trim(),
-                commentaires: client.commentaires?.trim() || ''
+                wilaya: client.wilaya
             },
             articles: articles.map(article => ({
-                id: article.id,
+                productId: article.productId,
                 nom: article.nom,
-                prix: Number(article.prix),
-                quantite: Number(article.quantite),
-                image: article.image || '',
-                categorie: article.categorie || ''
+                prix: parseFloat(article.prix),
+                quantite: parseInt(article.quantite),
+                image: article.image || ''
             })),
-            sousTotal: Number(sousTotal),
-            fraisLivraison: Number(fraisLivraison),
-            total: Number(total),
-            statut: statut || 'en-attente',
+            sousTotal: parseFloat(sousTotal) || 0,
+            fraisLivraison: parseFloat(fraisLivraison) || 0,
+            total: parseFloat(total) || 0,
+            statut: 'en-attente',
             modePaiement: modePaiement || 'Paiement à la livraison',
-            dateCommande: dateCommande ? new Date(dateCommande) : new Date(),
-            commentaires: commentaires?.trim() || '',
-            dateCreated: new Date()
-        };
+            commentaires: commentaires || '',
+            dateCommande: new Date()
+        });
         
-        // Save order to memory
-        orders.unshift(newOrder); // Add to beginning for newest first
-        
-        console.log('✅ Order created successfully:', newOrder._id);
-        console.log('📊 Total orders in memory:', orders.length);
+        await order.save();
+        console.log('✅ Order created successfully:', order.numeroCommande);
         
         res.status(201).json({
-            success: true,
-            order: newOrder,
-            message: 'Commande créée avec succès'
+            message: 'Commande créée avec succès',
+            order: {
+                _id: order._id,
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                total: order.total,
+                dateCommande: order.dateCommande
+            }
         });
         
     } catch (error) {
-        console.error('❌ Create order error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur lors de la création de la commande' 
+        console.error('❌ Order creation error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données de commande invalides'
+            });
+        }
+        
+        res.status(500).json({
+            message: 'Erreur serveur lors de la création de la commande'
         });
     }
 });
 
-// Get all orders (for admin)
-router.get('/', async (req, res) => {
+// @route   GET /api/orders/user/all
+// @desc    Get user orders
+// @access  Private
+router.get('/user/all', auth, async (req, res) => {
     try {
-        console.log('📋 Getting all orders - Total:', orders.length);
+        console.log('📦 Getting orders for user:', req.user.id);
         
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 50;
-        const skip = (page - 1) * limit;
-        
-        // Sort by date, newest first
-        const sortedOrders = [...orders].sort((a, b) => new Date(b.dateCommande) - new Date(a.dateCommande));
-        
-        // Apply pagination
-        const paginatedOrders = sortedOrders.slice(skip, skip + limit);
-        
-        console.log(`📄 Returning ${paginatedOrders.length} orders for page ${page}`);
+        const orders = await Order.find({ 
+            'client.userId': req.user.id 
+        }).sort({ dateCommande: -1 });
         
         res.json({
-            success: true,
-            orders: paginatedOrders,
+            orders,
+            count: orders.length
+        });
+        
+    } catch (error) {
+        console.error('❌ Get user orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
+        });
+    }
+});
+
+// @route   GET /api/orders/:id
+// @desc    Get order by ID
+// @access  Private
+router.get('/:id', auth, async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        // Check if user owns this order or is admin
+        if (order.client.userId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès non autorisé à cette commande'
+            });
+        }
+        
+        res.json(order);
+        
+    } catch (error) {
+        console.error('❌ Get order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération de la commande'
+        });
+    }
+});
+
+// @route   PUT /api/orders/:id
+// @desc    Update order status
+// @access  Private
+router.put('/:id', auth, async (req, res) => {
+    try {
+        const { statut } = req.body;
+        
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        // Check permissions
+        if (req.user.role !== 'admin') {
+            // Users can only cancel their own orders and only if status is 'en-attente'
+            if (order.client.userId !== req.user.id) {
+                return res.status(403).json({
+                    message: 'Accès non autorisé à cette commande'
+                });
+            }
+            
+            if (statut !== 'annulée' || order.statut !== 'en-attente') {
+                return res.status(403).json({
+                    message: 'Vous pouvez seulement annuler une commande en attente'
+                });
+            }
+        }
+        
+        // Validate status
+        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
+        if (!validStatuses.includes(statut)) {
+            return res.status(400).json({
+                message: 'Statut de commande invalide'
+            });
+        }
+        
+        order.statut = statut;
+        
+        if (statut === 'livrée') {
+            order.dateLivraison = new Date();
+        }
+        
+        await order.save();
+        
+        console.log(`✅ Order ${order.numeroCommande} status updated to: ${statut}`);
+        
+        res.json({
+            message: 'Statut de commande mis à jour',
+            order: {
+                _id: order._id,
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                dateLivraison: order.dateLivraison
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Update order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders
+// @desc    Get all orders (Admin only)
+// @access  Private/Admin
+router.get('/', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        console.log('📦 Admin getting all orders');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        // Filter by status
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Filter by date range
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                query.dateCommande.$lte = new Date(req.query.dateTo);
+            }
+        }
+        
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        res.json({
+            orders,
             pagination: {
                 currentPage: page,
-                totalPages: Math.ceil(orders.length / limit),
-                totalOrders: orders.length,
-                hasNextPage: skip + limit < orders.length,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
                 hasPrevPage: page > 1
             }
         });
         
     } catch (error) {
-        console.error('❌ Get orders error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur' 
+        console.error('❌ Get all orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
         });
     }
 });
 
-// Get single order by ID or order number
-router.get('/:id', async (req, res) => {
+// @route   DELETE /api/orders/:id
+// @desc    Delete order (Admin only)
+// @access  Private/Admin
+router.delete('/:id', auth, async (req, res) => {
     try {
-        console.log('🔍 Getting order:', req.params.id);
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
         
-        let order;
-        
-        // Try to find by order number first, then by ID
-        order = orders.find(o => o.numeroCommande === req.params.id || o._id === req.params.id);
+        const order = await Order.findById(req.params.id);
         
         if (!order) {
-            return res.status(404).json({ 
-                success: false,
-                message: 'Commande non trouvée' 
+            return res.status(404).json({
+                message: 'Commande non trouvée'
             });
         }
         
-        console.log('✅ Order found:', order.numeroCommande);
+        await Order.findByIdAndDelete(req.params.id);
+        
+        console.log(`✅ Order ${order.numeroCommande} deleted by admin`);
         
         res.json({
-            success: true,
-            order
-        });
-        
-    } catch (error) {
-        console.error('❌ Get order error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur' 
-        });
-    }
-});
-
-// Update order status
-router.put('/:id', async (req, res) => {
-    try {
-        console.log('📝 Updating order:', req.params.id, 'with:', req.body);
-        
-        let order = orders.find(o => o.numeroCommande === req.params.id || o._id === req.params.id);
-        
-        if (!order) {
-            return res.status(404).json({ 
-                success: false,
-                message: 'Commande non trouvée' 
-            });
-        }
-        
-        // Update allowed fields
-        if (req.body.statut) {
-            order.statut = req.body.statut;
-            
-            // Update status dates
-            const now = new Date();
-            if (req.body.statut === 'confirmée' && !order.dateConfirmation) {
-                order.dateConfirmation = now;
-            } else if (req.body.statut === 'expédiée' && !order.dateExpedition) {
-                order.dateExpedition = now;
-            } else if (req.body.statut === 'livrée') {
-                order.dateLivraison = req.body.dateLivraison ? new Date(req.body.dateLivraison) : now;
-            }
-        }
-        
-        if (req.body.noteInterne !== undefined) {
-            order.noteInterne = req.body.noteInterne;
-        }
-        
-        console.log('✅ Order updated successfully');
-        
-        res.json({
-            success: true,
-            order,
-            message: 'Commande mise à jour avec succès'
-        });
-        
-    } catch (error) {
-        console.error('❌ Update order error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur lors de la mise à jour de la commande' 
-        });
-    }
-});
-
-// Delete order (admin only)
-router.delete('/:id', async (req, res) => {
-    try {
-        console.log('🗑️ Deleting order:', req.params.id);
-        
-        const orderIndex = orders.findIndex(o => o.numeroCommande === req.params.id || o._id === req.params.id);
-        
-        if (orderIndex === -1) {
-            return res.status(404).json({ 
-                success: false,
-                message: 'Commande non trouvée' 
-            });
-        }
-        
-        const deletedOrder = orders[orderIndex];
-        orders.splice(orderIndex, 1);
-        
-        console.log('✅ Order deleted successfully:', deletedOrder.numeroCommande);
-        console.log('📊 Remaining orders:', orders.length);
-        
-        res.json({
-            success: true,
             message: 'Commande supprimée avec succès'
         });
         
     } catch (error) {
         console.error('❌ Delete order error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur lors de la suppression de la commande' 
+        res.status(500).json({
+            message: 'Erreur lors de la suppression de la commande'
         });
     }
 });
 
-// Get order statistics
-router.get('/stats/all', async (req, res) => {
+// @route   GET /api/orders/stats/dashboard
+// @desc    Get order statistics for admin dashboard
+// @access  Private/Admin
+router.get('/stats/dashboard', auth, async (req, res) => {
     try {
-        const totalOrders = orders.length;
-        const pendingOrders = orders.filter(o => o.statut === 'en-attente').length;
-        const confirmedOrders = orders.filter(o => o.statut === 'confirmée').length;
-        const deliveredOrders = orders.filter(o => o.statut === 'livrée').length;
-        const totalRevenue = orders.reduce((sum, order) => sum + (order.total || 0), 0);
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+        
+        // Get various statistics
+        const totalOrders = await Order.countDocuments();
+        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
+        const monthlyOrders = await Order.countDocuments({ 
+            dateCommande: { $gte: startOfMonth } 
+        });
+        
+        // Calculate monthly revenue
+        const monthlyRevenue = await Order.aggregate([
+            {
+                $match: {
+                    dateCommande: { $gte: startOfMonth },
+                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$total' }
+                }
+            }
+        ]);
+        
+        // Get orders by status
+        const ordersByStatus = await Order.aggregate([
+            {
+                $group: {
+                    _id: '$statut',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
         
         res.json({
-            success: true,
-            stats: {
-                totalOrders,
-                pendingOrders,
-                confirmedOrders,
-                deliveredOrders,
-                totalRevenue
+            totalOrders,
+            pendingOrders,
+            monthlyOrders,
+            monthlyRevenue: monthlyRevenue[0]?.total || 0,
+            ordersByStatus: ordersByStatus.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {})
+        });
+        
+    } catch (error) {
+        console.error('❌ Get order stats error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des statistiques'
+        });
+    }
+});
+
+module.exports = router;const express = require('express');
+const Order = require('../models/Order');
+const auth = require('../middleware/auth');
+
+const router = express.Router();
+
+// @route   POST /api/orders
+// @desc    Create new order
+// @access  Public
+router.post('/', async (req, res) => {
+    try {
+        console.log('📦 New order creation:', req.body);
+        
+        const {
+            numeroCommande,
+            client,
+            articles,
+            sousTotal,
+            fraisLivraison,
+            total,
+            modePaiement,
+            commentaires
+        } = req.body;
+        
+        // Validation
+        if (!numeroCommande || !client || !articles || articles.length === 0) {
+            return res.status(400).json({
+                message: 'Données de commande incomplètes'
+            });
+        }
+        
+        if (!client.prenom || !client.nom || !client.email || !client.telephone || !client.adresse || !client.wilaya) {
+            return res.status(400).json({
+                message: 'Informations client incomplètes'
+            });
+        }
+        
+        // Create order
+        const order = new Order({
+            numeroCommande,
+            client: {
+                userId: req.user ? req.user.id : null,
+                prenom: client.prenom.trim(),
+                nom: client.nom.trim(),
+                email: client.email.toLowerCase().trim(),
+                telephone: client.telephone.replace(/\s+/g, ''),
+                adresse: client.adresse.trim(),
+                wilaya: client.wilaya
+            },
+            articles: articles.map(article => ({
+                productId: article.productId,
+                nom: article.nom,
+                prix: parseFloat(article.prix),
+                quantite: parseInt(article.quantite),
+                image: article.image || ''
+            })),
+            sousTotal: parseFloat(sousTotal) || 0,
+            fraisLivraison: parseFloat(fraisLivraison) || 0,
+            total: parseFloat(total) || 0,
+            statut: 'en-attente',
+            modePaiement: modePaiement || 'Paiement à la livraison',
+            commentaires: commentaires || '',
+            dateCommande: new Date()
+        });
+        
+        await order.save();
+        console.log('✅ Order created successfully:', order.numeroCommande);
+        
+        res.status(201).json({
+            message: 'Commande créée avec succès',
+            order: {
+                _id: order._id,
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                total: order.total,
+                dateCommande: order.dateCommande
             }
         });
         
     } catch (error) {
-        console.error('❌ Get stats error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur' 
+        console.error('❌ Order creation error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données de commande invalides'
+            });
+        }
+        
+        res.status(500).json({
+            message: 'Erreur serveur lors de la création de la commande'
         });
     }
 });
 
-// Debug endpoint to see all orders
-router.get('/debug/all', (req, res) => {
-    res.json({
-        success: true,
-        message: 'Debug endpoint',
-        totalOrders: orders.length,
-        orders: orders.map(o => ({
-            id: o._id,
-            numeroCommande: o.numeroCommande,
-            client: o.client.email,
-            total: o.total,
-            statut: o.statut,
-            dateCommande: o.dateCommande
-        }))
-    });
+// @route   GET /api/orders/user/all
+// @desc    Get user orders
+// @access  Private
+router.get('/user/all', auth, async (req, res) => {
+    try {
+        console.log('📦 Getting orders for user:', req.user.id);
+        
+        const orders = await Order.find({ 
+            'client.userId': req.user.id 
+        }).sort({ dateCommande: -1 });
+        
+        res.json({
+            orders,
+            count: orders.length
+        });
+        
+    } catch (error) {
+        console.error('❌ Get user orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
+        });
+    }
+});
+
+// @route   GET /api/orders/:id
+// @desc    Get order by ID
+// @access  Private
+router.get('/:id', auth, async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        // Check if user owns this order or is admin
+        if (order.client.userId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès non autorisé à cette commande'
+            });
+        }
+        
+        res.json(order);
+        
+    } catch (error) {
+        console.error('❌ Get order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération de la commande'
+        });
+    }
+});
+
+// @route   PUT /api/orders/:id
+// @desc    Update order status
+// @access  Private
+router.put('/:id', auth, async (req, res) => {
+    try {
+        const { statut } = req.body;
+        
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        // Check permissions
+        if (req.user.role !== 'admin') {
+            // Users can only cancel their own orders and only if status is 'en-attente'
+            if (order.client.userId !== req.user.id) {
+                return res.status(403).json({
+                    message: 'Accès non autorisé à cette commande'
+                });
+            }
+            
+            if (statut !== 'annulée' || order.statut !== 'en-attente') {
+                return res.status(403).json({
+                    message: 'Vous pouvez seulement annuler une commande en attente'
+                });
+            }
+        }
+        
+        // Validate status
+        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
+        if (!validStatuses.includes(statut)) {
+            return res.status(400).json({
+                message: 'Statut de commande invalide'
+            });
+        }
+        
+        order.statut = statut;
+        
+        if (statut === 'livrée') {
+            order.dateLivraison = new Date();
+        }
+        
+        await order.save();
+        
+        console.log(`✅ Order ${order.numeroCommande} status updated to: ${statut}`);
+        
+        res.json({
+            message: 'Statut de commande mis à jour',
+            order: {
+                _id: order._id,
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                dateLivraison: order.dateLivraison
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Update order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders
+// @desc    Get all orders (Admin only)
+// @access  Private/Admin
+router.get('/', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        console.log('📦 Admin getting all orders');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        // Filter by status
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Filter by date range
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                query.dateCommande.$lte = new Date(req.query.dateTo);
+            }
+        }
+        
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get all orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
+        });
+    }
+});
+
+// @route   DELETE /api/orders/:id
+// @desc    Delete order (Admin only)
+// @access  Private/Admin
+router.delete('/:id', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        await Order.findByIdAndDelete(req.params.id);
+        
+        console.log(`✅ Order ${order.numeroCommande} deleted by admin`);
+        
+        res.json({
+            message: 'Commande supprimée avec succès'
+        });
+        
+    } catch (error) {
+        console.error('❌ Delete order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la suppression de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders/stats/dashboard
+// @desc    Get order statistics for admin dashboard
+// @access  Private/Admin
+router.get('/stats/dashboard', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+        
+        // Get various statistics
+        const totalOrders = await Order.countDocuments();
+        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
+        const monthlyOrders = await Order.countDocuments({ 
+            dateCommande: { $gte: startOfMonth } 
+        });
+        
+        // Calculate monthly revenue
+        const monthlyRevenue = await Order.aggregate([
+            {
+                $match: {
+                    dateCommande: { $gte: startOfMonth },
+                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$total' }
+                }
+            }
+        ]);
+        
+        // Get orders by status
+        const ordersByStatus = await Order.aggregate([
+            {
+                $group: {
+                    _id: '$statut',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        
+        res.json({
+            totalOrders,
+            pendingOrders,
+            monthlyOrders,
+            monthlyRevenue: monthlyRevenue[0]?.total || 0,
+            ordersByStatus: ordersByStatus.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {})
+        });
+        
+    } catch (error) {
+        console.error('❌ Get order stats error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des statistiques'
+        });
+    }
 });
 
 module.exports = router;

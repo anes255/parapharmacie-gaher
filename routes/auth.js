@@ -4,29 +4,51 @@ const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 
-// Simple in-memory user storage for demo (replace with proper database later)
-let users = [
-    {
-        _id: '1',
-        email: 'pharmaciegaher@gmail.com',
-        password: '$2a$12$V8o7.5z8Qr3K4vF9qJ7oe.8yX9KtqZ2hN6bA4LcP3j1qWx8RtY6Em', // hashed 'anesaya75'
-        nom: 'Gaher',
-        prenom: 'Parapharmacie',
-        telephone: '+213123456789',
-        adresse: 'Tipaza, Algérie',
-        wilaya: 'Tipaza',
-        role: 'admin',
-        dateInscription: new Date(),
-        derniereConnexion: new Date()
-    }
-];
+// In-memory users storage (will persist during server session)
+let users = [];
 
-// Helper function to find user by email
+// Initialize admin user on startup
+async function initializeAdmin() {
+    try {
+        // Check if admin already exists
+        const adminExists = users.find(u => u.email === 'pharmaciegaher@gmail.com');
+        if (!adminExists) {
+            console.log('Creating admin user...');
+            
+            // Hash the admin password properly
+            const salt = await bcrypt.genSalt(12);
+            const hashedPassword = await bcrypt.hash('anesaya75', salt);
+            
+            const adminUser = {
+                _id: 'admin_' + Date.now(),
+                email: 'pharmaciegaher@gmail.com',
+                password: hashedPassword,
+                nom: 'Gaher',
+                prenom: 'Parapharmacie',
+                telephone: '+213123456789',
+                adresse: 'Tipaza, Algérie',
+                wilaya: 'Tipaza',
+                role: 'admin',
+                dateInscription: new Date(),
+                derniereConnexion: new Date()
+            };
+            
+            users.push(adminUser);
+            console.log('✅ Admin user created successfully');
+        }
+    } catch (error) {
+        console.error('Error creating admin user:', error);
+    }
+}
+
+// Initialize admin user when module loads
+initializeAdmin();
+
+// Helper functions
 function findUserByEmail(email) {
     return users.find(user => user.email.toLowerCase() === email.toLowerCase());
 }
 
-// Helper function to generate JWT token
 function generateToken(user) {
     return jwt.sign(
         { 
@@ -34,7 +56,7 @@ function generateToken(user) {
             email: user.email, 
             role: user.role 
         },
-        process.env.JWT_SECRET || 'your-secret-key-change-this-in-production',
+        process.env.JWT_SECRET || 'shifa-parapharmacie-secret-key-2024',
         { expiresIn: '7d' }
     );
 }
@@ -42,7 +64,7 @@ function generateToken(user) {
 // Register user
 router.post('/register', async (req, res) => {
     try {
-        console.log('Register attempt:', req.body.email);
+        console.log('Registration attempt for:', req.body.email);
         
         const { nom, prenom, email, password, telephone, adresse, wilaya } = req.body;
         
@@ -76,7 +98,7 @@ router.post('/register', async (req, res) => {
         
         // Create user
         const newUser = {
-            _id: Date.now().toString(),
+            _id: 'user_' + Date.now(),
             nom: nom.trim(),
             prenom: prenom.trim(),
             email: email.trim().toLowerCase(),
@@ -94,7 +116,7 @@ router.post('/register', async (req, res) => {
         // Generate JWT token
         const token = generateToken(newUser);
         
-        console.log('User registered successfully:', newUser.email);
+        console.log('✅ User registered successfully:', newUser.email);
         
         res.status(201).json({
             success: true,
@@ -113,7 +135,7 @@ router.post('/register', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Register error:', error);
+        console.error('Registration error:', error);
         res.status(500).json({ 
             success: false,
             message: 'Erreur lors de la création du compte' 
@@ -124,7 +146,7 @@ router.post('/register', async (req, res) => {
 // Login user
 router.post('/login', async (req, res) => {
     try {
-        console.log('Login attempt:', req.body.email);
+        console.log('Login attempt for:', req.body.email);
         
         const { email, password } = req.body;
         
@@ -139,7 +161,7 @@ router.post('/login', async (req, res) => {
         // Find user
         const user = findUserByEmail(email);
         if (!user) {
-            console.log('User not found:', email);
+            console.log('❌ User not found:', email);
             return res.status(400).json({ 
                 success: false,
                 message: 'Email ou mot de passe incorrect' 
@@ -150,16 +172,17 @@ router.post('/login', async (req, res) => {
         let isMatch = false;
         try {
             isMatch = await bcrypt.compare(password, user.password);
+            console.log('Password comparison result:', isMatch);
         } catch (bcryptError) {
-            console.error('Bcrypt error:', bcryptError);
-            // Fallback: check if it's the plain text password (for initial setup)
-            if (password === 'anesaya75' && user.email === 'pharmaciegaher@gmail.com') {
-                isMatch = true;
-            }
+            console.error('Bcrypt comparison error:', bcryptError);
+            return res.status(500).json({ 
+                success: false,
+                message: 'Erreur de vérification du mot de passe' 
+            });
         }
         
         if (!isMatch) {
-            console.log('Password mismatch for:', email);
+            console.log('❌ Password mismatch for:', email);
             return res.status(400).json({ 
                 success: false,
                 message: 'Email ou mot de passe incorrect' 
@@ -172,7 +195,7 @@ router.post('/login', async (req, res) => {
         // Generate JWT token
         const token = generateToken(user);
         
-        console.log('User logged in successfully:', user.email);
+        console.log('✅ User logged in successfully:', user.email);
         
         res.json({
             success: true,
@@ -194,217 +217,103 @@ router.post('/login', async (req, res) => {
         console.error('Login error:', error);
         res.status(500).json({ 
             success: false,
-            message: 'Erreur lors de la connexion',
-            details: error.message
+            message: 'Erreur lors de la connexion' 
         });
     }
 });
+
+// Verify token middleware
+function verifyToken(req, res, next) {
+    const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
+    
+    if (!token) {
+        return res.status(401).json({ 
+            success: false,
+            message: 'Aucun token fourni' 
+        });
+    }
+    
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa-parapharmacie-secret-key-2024');
+        const user = users.find(u => u._id === decoded.id);
+        
+        if (!user) {
+            return res.status(401).json({ 
+                success: false,
+                message: 'Token invalide - utilisateur non trouvé' 
+            });
+        }
+        
+        req.user = user;
+        next();
+    } catch (jwtError) {
+        console.error('JWT verification error:', jwtError);
+        return res.status(401).json({ 
+            success: false,
+            message: 'Token invalide' 
+        });
+    }
+}
 
 // Get user profile
-router.get('/profile', async (req, res) => {
-    try {
-        // Simple token verification
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (!token) {
-            return res.status(401).json({ 
-                success: false,
-                message: 'Aucun token fourni' 
-            });
-        }
-        
-        let decoded;
-        try {
-            decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-this-in-production');
-        } catch (jwtError) {
-            return res.status(401).json({ 
-                success: false,
-                message: 'Token invalide' 
-            });
-        }
-        
-        const user = users.find(u => u._id === decoded.id);
-        if (!user) {
-            return res.status(404).json({ 
-                success: false,
-                message: 'Utilisateur non trouvé' 
-            });
-        }
-        
-        res.json({
-            success: true,
-            user: {
-                id: user._id,
-                nom: user.nom,
-                prenom: user.prenom,
-                email: user.email,
-                telephone: user.telephone,
-                adresse: user.adresse,
-                wilaya: user.wilaya,
-                role: user.role,
-                dateInscription: user.dateInscription,
-                derniereConnexion: user.derniereConnexion
-            }
-        });
-        
-    } catch (error) {
-        console.error('Get profile error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur' 
-        });
-    }
-});
-
-// Update user profile
-router.put('/profile', async (req, res) => {
-    try {
-        // Simple token verification
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (!token) {
-            return res.status(401).json({ 
-                success: false,
-                message: 'Aucun token fourni' 
-            });
-        }
-        
-        let decoded;
-        try {
-            decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-this-in-production');
-        } catch (jwtError) {
-            return res.status(401).json({ 
-                success: false,
-                message: 'Token invalide' 
-            });
-        }
-        
-        const userIndex = users.findIndex(u => u._id === decoded.id);
-        if (userIndex === -1) {
-            return res.status(404).json({ 
-                success: false,
-                message: 'Utilisateur non trouvé' 
-            });
-        }
-        
-        // Update allowed fields
-        const allowedUpdates = ['nom', 'prenom', 'telephone', 'adresse', 'wilaya'];
-        
-        allowedUpdates.forEach(field => {
-            if (req.body[field] !== undefined) {
-                users[userIndex][field] = req.body[field];
-            }
-        });
-        
-        res.json({
-            success: true,
-            user: {
-                id: users[userIndex]._id,
-                nom: users[userIndex].nom,
-                prenom: users[userIndex].prenom,
-                email: users[userIndex].email,
-                telephone: users[userIndex].telephone,
-                adresse: users[userIndex].adresse,
-                wilaya: users[userIndex].wilaya,
-                role: users[userIndex].role
-            },
-            message: 'Profil mis à jour avec succès'
-        });
-        
-    } catch (error) {
-        console.error('Update profile error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur lors de la mise à jour du profil' 
-        });
-    }
-});
-
-// Verify token
-router.get('/verify', async (req, res) => {
-    try {
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (!token) {
-            return res.status(401).json({ 
-                success: false,
-                message: 'Aucun token fourni' 
-            });
-        }
-        
-        let decoded;
-        try {
-            decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-this-in-production');
-        } catch (jwtError) {
-            return res.status(401).json({ 
-                success: false,
-                message: 'Token invalide' 
-            });
-        }
-        
-        const user = users.find(u => u._id === decoded.id);
-        if (!user) {
-            return res.status(404).json({ 
-                success: false,
-                message: 'Utilisateur non trouvé' 
-            });
-        }
-        
-        res.json({
-            success: true,
-            user: {
-                id: user._id,
-                nom: user.nom,
-                prenom: user.prenom,
-                email: user.email,
-                role: user.role
-            },
-            message: 'Token valide'
-        });
-        
-    } catch (error) {
-        console.error('Verify token error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur' 
-        });
-    }
-});
-
-// Test route
-router.get('/test', (req, res) => {
+router.get('/profile', verifyToken, (req, res) => {
     res.json({
         success: true,
-        message: 'Auth routes are working!',
-        timestamp: new Date().toISOString(),
-        registeredUsers: users.length
+        user: {
+            id: req.user._id,
+            nom: req.user.nom,
+            prenom: req.user.prenom,
+            email: req.user.email,
+            telephone: req.user.telephone,
+            adresse: req.user.adresse,
+            wilaya: req.user.wilaya,
+            role: req.user.role,
+            dateInscription: req.user.dateInscription,
+            derniereConnexion: req.user.derniereConnexion
+        }
     });
 });
 
-// Get all users (admin only)
-router.get('/users', (req, res) => {
-    try {
-        const publicUsers = users.map(user => ({
-            id: user._id,
-            nom: user.nom,
-            prenom: user.prenom,
-            email: user.email,
-            role: user.role,
-            dateInscription: user.dateInscription
-        }));
-        
-        res.json({
-            success: true,
-            users: publicUsers,
-            total: users.length
-        });
-    } catch (error) {
-        console.error('Get users error:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur' 
-        });
-    }
+// Verify token endpoint
+router.get('/verify', verifyToken, (req, res) => {
+    res.json({
+        success: true,
+        user: {
+            id: req.user._id,
+            nom: req.user.nom,
+            prenom: req.user.prenom,
+            email: req.user.email,
+            role: req.user.role
+        },
+        message: 'Token valide'
+    });
+});
+
+// Test endpoint
+router.get('/test', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Auth system is working!',
+        timestamp: new Date().toISOString(),
+        totalUsers: users.length,
+        adminExists: !!users.find(u => u.role === 'admin')
+    });
+});
+
+// Debug endpoint (remove in production)
+router.get('/debug', (req, res) => {
+    const publicUsers = users.map(user => ({
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        hasPassword: !!user.password
+    }));
+    
+    res.json({
+        success: true,
+        users: publicUsers,
+        message: 'Debug info - remove in production!'
+    });
 });
 
 module.exports = router;

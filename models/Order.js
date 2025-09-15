@@ -132,19 +132,19 @@ const OrderSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Index pour la recherche et optimisation
+// Index for better performance
 OrderSchema.index({ numeroCommande: 1 });
 OrderSchema.index({ 'client.email': 1 });
 OrderSchema.index({ statut: 1 });
 OrderSchema.index({ dateCommande: -1 });
 
-// Méthode pour calculer le total automatiquement
+// Auto-calculate total before saving
 OrderSchema.pre('save', function(next) {
     this.total = this.sousTotal + this.fraisLivraison;
     next();
 });
 
-// Méthode pour mettre à jour les dates selon le statut
+// Update status dates automatically
 OrderSchema.pre('save', function(next) {
     const now = new Date();
     
@@ -158,55 +158,5 @@ OrderSchema.pre('save', function(next) {
     
     next();
 });
-
-// Méthode virtuelle pour obtenir le nom complet du client
-OrderSchema.virtual('client.nomComplet').get(function() {
-    return `${this.client.prenom} ${this.client.nom}`;
-});
-
-// Méthode pour obtenir le nombre d'articles
-OrderSchema.virtual('nombreArticles').get(function() {
-    return this.articles.reduce((total, article) => total + article.quantite, 0);
-});
-
-// Méthode statique pour obtenir les statistiques
-OrderSchema.statics.getStats = async function() {
-    const stats = await this.aggregate([
-        {
-            $group: {
-                _id: null,
-                totalOrders: { $sum: 1 },
-                totalRevenue: { $sum: '$total' },
-                averageOrderValue: { $avg: '$total' },
-                pendingOrders: {
-                    $sum: {
-                        $cond: [{ $eq: ['$statut', 'en-attente'] }, 1, 0]
-                    }
-                }
-            }
-        }
-    ]);
-    
-    return stats[0] || {
-        totalOrders: 0,
-        totalRevenue: 0,
-        averageOrderValue: 0,
-        pendingOrders: 0
-    };
-};
-
-// Méthode statique pour obtenir les commandes par période
-OrderSchema.statics.getOrdersByPeriod = async function(startDate, endDate) {
-    return this.find({
-        dateCommande: {
-            $gte: startDate,
-            $lte: endDate
-        }
-    }).sort({ dateCommande: -1 });
-};
-
-// Assurer que les objets JSON incluent les propriétés virtuelles
-OrderSchema.set('toJSON', { virtuals: true });
-OrderSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Order', OrderSchema);

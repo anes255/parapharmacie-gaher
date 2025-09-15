@@ -20,7 +20,10 @@ const UserSchema = new mongoose.Schema({
         unique: true,
         lowercase: true,
         trim: true,
-        match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Format d\'email invalide']
+        match: [
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+            'Format d\'email invalide'
+        ]
     },
     password: {
         type: String,
@@ -31,18 +34,17 @@ const UserSchema = new mongoose.Schema({
     telephone: {
         type: String,
         required: [true, 'Le téléphone est requis'],
-        unique: true,
-        match: [/^(\+213|0)[5-9]\d{8}$/, 'Format de téléphone algérien invalide']
+        trim: true
     },
     adresse: {
         type: String,
         trim: true,
-        default: ''
+        maxlength: [200, 'L\'adresse ne peut pas dépasser 200 caractères']
     },
     ville: {
         type: String,
         trim: true,
-        default: ''
+        maxlength: [50, 'La ville ne peut pas dépasser 50 caractères']
     },
     wilaya: {
         type: String,
@@ -54,14 +56,13 @@ const UserSchema = new mongoose.Schema({
             'Constantine', 'Médéa', 'Mostaganem', 'M\'Sila', 'Mascara', 'Ouargla', 'Oran', 'El Bayadh',
             'Illizi', 'Bordj Bou Arréridj', 'Boumerdès', 'El Tarf', 'Tindouf', 'Tissemsilt', 'El Oued',
             'Khenchela', 'Souk Ahras', 'Tipaza', 'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent',
-            'Ghardaïa', 'Relizane'
+            'Ghardaïa', 'Relizane', 'Timimoun', 'Bordj Badji Mokhtar', 'Ouled Djellal', 'Béni Abbès',
+            'In Salah', 'In Guezzam', 'Touggourt', 'Djanet', 'El M\'Ghair', 'El Meniaa'
         ]
     },
     codePostal: {
         type: String,
-        trim: true,
-        default: '',
-        match: [/^\d{5}$|^$/, 'Code postal invalide (5 chiffres requis)']
+        trim: true
     },
     role: {
         type: String,
@@ -89,38 +90,33 @@ const UserSchema = new mongoose.Schema({
             type: Boolean,
             default: false
         },
-        language: {
+        langue: {
             type: String,
             enum: ['fr', 'ar'],
             default: 'fr'
         }
     },
-    resetPasswordToken: String,
-    resetPasswordExpires: Date,
-    emailVerified: {
-        type: Boolean,
-        default: false
-    },
-    emailVerificationToken: String
-}, {
-    timestamps: true,
-    toJSON: {
-        transform: function(doc, ret) {
-            delete ret.password;
-            delete ret.resetPasswordToken;
-            delete ret.resetPasswordExpires;
-            delete ret.emailVerificationToken;
-            return ret;
-        }
+    tentativesConnexion: {
+        count: {
+            type: Number,
+            default: 0
+        },
+        lastAttempt: Date,
+        blocked: {
+            type: Boolean,
+            default: false
+        },
+        blockedUntil: Date
     }
+}, {
+    timestamps: true
 });
 
-// Index for performance
+// Index for search and performance
 UserSchema.index({ email: 1 });
 UserSchema.index({ telephone: 1 });
-UserSchema.index({ role: 1, actif: 1 });
 
-// Pre-save middleware to hash password
+// Hash password before saving
 UserSchema.pre('save', async function(next) {
     // Only hash the password if it has been modified (or is new)
     if (!this.isModified('password')) return next();
@@ -135,54 +131,78 @@ UserSchema.pre('save', async function(next) {
     }
 });
 
-// Instance method to check password
+// Compare password method
 UserSchema.methods.comparePassword = async function(candidatePassword) {
     try {
         return await bcrypt.compare(candidatePassword, this.password);
     } catch (error) {
-        throw new Error('Erreur lors de la vérification du mot de passe');
+        throw error;
     }
 };
 
-// Instance method to update last connection
+// Update last connection
 UserSchema.methods.updateLastConnection = async function() {
-    try {
-        this.dernierConnexion = new Date();
-        await this.save({ validateBeforeSave: false });
-    } catch (error) {
-        console.log('Error updating last connection:', error);
+    this.dernierConnexion = new Date();
+    this.tentativesConnexion.count = 0;
+    this.tentativesConnexion.blocked = false;
+    this.tentativesConnexion.blockedUntil = undefined;
+    return this.save();
+};
+
+// Handle failed login attempts
+UserSchema.methods.handleFailedLogin = async function() {
+    this.tentativesConnexion.count += 1;
+    this.tentativesConnexion.lastAttempt = new Date();
+    
+    // Block account after 5 failed attempts
+    if (this.tentativesConnexion.count >= 5) {
+        this.tentativesConnexion.blocked = true;
+        this.tentativesConnexion.blockedUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
     }
+    
+    return this.save();
 };
 
-// Static method to find by email with password
-UserSchema.statics.findByEmailWithPassword = function(email) {
-    return this.findOne({ email: email.toLowerCase(), actif: true }).select('+password');
-};
-
-// Static method to check if email exists
-UserSchema.statics.emailExists = function(email, excludeId = null) {
-    const query = { email: email.toLowerCase() };
-    if (excludeId) {
-        query._id = { $ne: excludeId };
+// Check if account is blocked
+UserSchema.methods.isBlocked = function() {
+    if (this.tentativesConnexion.blocked) {
+        if (this.tentativesConnexion.blockedUntil && new Date() > this.tentativesConnexion.blockedUntil) {
+            // Unblock account
+            this.tentativesConnexion.blocked = false;
+            this.tentativesConnexion.count = 0;
+            this.tentativesConnexion.blockedUntil = undefined;
+            this.save();
+            return false;
+        }
+        return true;
     }
-    return this.findOne(query);
+    return false;
 };
 
-// Static method to check if phone exists
-UserSchema.statics.phoneExists = function(telephone, excludeId = null) {
-    const query = { telephone };
-    if (excludeId) {
-        query._id = { $ne: excludeId };
-    }
-    return this.findOne(query);
-};
-
-// Virtual for full name
+// Get full name
 UserSchema.virtual('nomComplet').get(function() {
     return `${this.prenom} ${this.nom}`;
 });
 
-// Ensure virtual fields are serialized
-UserSchema.set('toJSON', { virtuals: true });
+// Transform output to hide sensitive data
+UserSchema.methods.toJSON = function() {
+    const user = this.toObject();
+    delete user.password;
+    delete user.tentativesConnexion;
+    return user;
+};
+
+// Static methods
+UserSchema.statics.findByEmail = function(email) {
+    return this.findOne({ email: email.toLowerCase() });
+};
+
+UserSchema.statics.findActive = function() {
+    return this.find({ actif: true });
+};
+
+UserSchema.statics.findAdmins = function() {
+    return this.find({ role: 'admin', actif: true });
+};
 
 module.exports = mongoose.model('User', UserSchema);

@@ -1,64 +1,45 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 
+// Simple and robust User schema
 const UserSchema = new mongoose.Schema({
     nom: {
         type: String,
-        required: [true, 'Le nom est requis'],
-        trim: true,
-        maxlength: [50, 'Le nom ne peut pas dépasser 50 caractères']
+        required: true,
+        trim: true
     },
     prenom: {
         type: String,
-        required: [true, 'Le prénom est requis'],
-        trim: true,
-        maxlength: [50, 'Le prénom ne peut pas dépasser 50 caractères']
+        required: true,
+        trim: true
     },
     email: {
         type: String,
-        required: [true, 'L\'email est requis'],
+        required: true,
         unique: true,
         lowercase: true,
-        trim: true,
-        match: [
-            /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-            'Format d\'email invalide'
-        ]
+        trim: true
     },
     password: {
         type: String,
-        required: [true, 'Le mot de passe est requis'],
-        minlength: [6, 'Le mot de passe doit contenir au moins 6 caractères'],
+        required: true,
         select: false // Don't include password in queries by default
     },
     telephone: {
         type: String,
-        required: [true, 'Le téléphone est requis'],
+        required: true,
         trim: true
     },
     adresse: {
         type: String,
-        trim: true,
-        maxlength: [200, 'L\'adresse ne peut pas dépasser 200 caractères']
+        trim: true
     },
     ville: {
         type: String,
-        trim: true,
-        maxlength: [50, 'La ville ne peut pas dépasser 50 caractères']
+        trim: true
     },
     wilaya: {
         type: String,
-        required: [true, 'La wilaya est requise'],
-        enum: [
-            'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar',
-            'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger',
-            'Djelfa', 'Jijel', 'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba', 'Guelma',
-            'Constantine', 'Médéa', 'Mostaganem', 'M\'Sila', 'Mascara', 'Ouargla', 'Oran', 'El Bayadh',
-            'Illizi', 'Bordj Bou Arréridj', 'Boumerdès', 'El Tarf', 'Tindouf', 'Tissemsilt', 'El Oued',
-            'Khenchela', 'Souk Ahras', 'Tipaza', 'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent',
-            'Ghardaïa', 'Relizane', 'Timimoun', 'Bordj Badji Mokhtar', 'Ouled Djellal', 'Béni Abbès',
-            'In Salah', 'In Guezzam', 'Touggourt', 'Djanet', 'El M\'Ghair', 'El Meniaa'
-        ]
+        required: true
     },
     codePostal: {
         type: String,
@@ -80,41 +61,13 @@ const UserSchema = new mongoose.Schema({
     dernierConnexion: {
         type: Date,
         default: Date.now
-    },
-    preferences: {
-        notifications: {
-            type: Boolean,
-            default: true
-        },
-        newsletter: {
-            type: Boolean,
-            default: false
-        },
-        langue: {
-            type: String,
-            enum: ['fr', 'ar'],
-            default: 'fr'
-        }
-    },
-    tentativesConnexion: {
-        count: {
-            type: Number,
-            default: 0
-        },
-        lastAttempt: Date,
-        blocked: {
-            type: Boolean,
-            default: false
-        },
-        blockedUntil: Date
     }
 }, {
     timestamps: true
 });
 
-// Index for search and performance
+// Index for performance
 UserSchema.index({ email: 1 });
-UserSchema.index({ telephone: 1 });
 
 // Hash password before saving
 UserSchema.pre('save', async function(next) {
@@ -122,11 +75,13 @@ UserSchema.pre('save', async function(next) {
     if (!this.isModified('password')) return next();
     
     try {
+        const bcrypt = require('bcryptjs');
         // Hash password with cost of 12
         const salt = await bcrypt.genSalt(12);
         this.password = await bcrypt.hash(this.password, salt);
         next();
     } catch (error) {
+        console.error('❌ Password hashing error:', error);
         next(error);
     }
 });
@@ -134,49 +89,23 @@ UserSchema.pre('save', async function(next) {
 // Compare password method
 UserSchema.methods.comparePassword = async function(candidatePassword) {
     try {
+        const bcrypt = require('bcryptjs');
         return await bcrypt.compare(candidatePassword, this.password);
     } catch (error) {
+        console.error('❌ Password comparison error:', error);
         throw error;
     }
 };
 
 // Update last connection
 UserSchema.methods.updateLastConnection = async function() {
-    this.dernierConnexion = new Date();
-    this.tentativesConnexion.count = 0;
-    this.tentativesConnexion.blocked = false;
-    this.tentativesConnexion.blockedUntil = undefined;
-    return this.save();
-};
-
-// Handle failed login attempts
-UserSchema.methods.handleFailedLogin = async function() {
-    this.tentativesConnexion.count += 1;
-    this.tentativesConnexion.lastAttempt = new Date();
-    
-    // Block account after 5 failed attempts
-    if (this.tentativesConnexion.count >= 5) {
-        this.tentativesConnexion.blocked = true;
-        this.tentativesConnexion.blockedUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+    try {
+        this.dernierConnexion = new Date();
+        return await this.save();
+    } catch (error) {
+        console.error('❌ Update last connection error:', error);
+        throw error;
     }
-    
-    return this.save();
-};
-
-// Check if account is blocked
-UserSchema.methods.isBlocked = function() {
-    if (this.tentativesConnexion.blocked) {
-        if (this.tentativesConnexion.blockedUntil && new Date() > this.tentativesConnexion.blockedUntil) {
-            // Unblock account
-            this.tentativesConnexion.blocked = false;
-            this.tentativesConnexion.count = 0;
-            this.tentativesConnexion.blockedUntil = undefined;
-            this.save();
-            return false;
-        }
-        return true;
-    }
-    return false;
 };
 
 // Get full name
@@ -188,7 +117,6 @@ UserSchema.virtual('nomComplet').get(function() {
 UserSchema.methods.toJSON = function() {
     const user = this.toObject();
     delete user.password;
-    delete user.tentativesConnexion;
     return user;
 };
 

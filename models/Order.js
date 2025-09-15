@@ -3,35 +3,103 @@ const mongoose = require('mongoose');
 const OrderSchema = new mongoose.Schema({
     numeroCommande: {
         type: String,
-        required: true,
+        required: [true, 'Le numéro de commande est requis'],
         unique: true,
-        index: true
+        trim: true
     },
     client: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: [true, 'Le client est requis']
+    },
+    articles: [{
+        id: {
+            type: String,
+            required: [true, 'ID de l\'article requis']
+        },
         nom: {
             type: String,
-            required: true,
+            required: [true, 'Nom de l\'article requis'],
+            trim: true
+        },
+        prix: {
+            type: Number,
+            required: [true, 'Prix de l\'article requis'],
+            min: [0, 'Le prix ne peut pas être négatif']
+        },
+        quantite: {
+            type: Number,
+            required: [true, 'Quantité requise'],
+            min: [1, 'La quantité doit être au moins 1']
+        },
+        image: {
+            type: String,
+            default: ''
+        },
+        categorie: {
+            type: String,
+            default: ''
+        }
+    }],
+    sousTotal: {
+        type: Number,
+        required: [true, 'Sous-total requis'],
+        min: [0, 'Le sous-total ne peut pas être négatif']
+    },
+    fraisLivraison: {
+        type: Number,
+        default: 0,
+        min: [0, 'Les frais de livraison ne peuvent pas être négatifs']
+    },
+    total: {
+        type: Number,
+        required: [true, 'Total requis'],
+        min: [0, 'Le total ne peut pas être négatif']
+    },
+    statut: {
+        type: String,
+        enum: {
+            values: ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'],
+            message: 'Statut invalide'
+        },
+        default: 'en-attente'
+    },
+    modePaiement: {
+        type: String,
+        enum: {
+            values: ['Paiement à la livraison', 'Carte bancaire', 'Virement', 'Espèces'],
+            message: 'Mode de paiement invalide'
+        },
+        default: 'Paiement à la livraison'
+    },
+    dateCommande: {
+        type: Date,
+        default: Date.now,
+        index: true
+    },
+    dateLivraison: {
+        type: Date,
+        default: null
+    },
+    dateExpedition: {
+        type: Date,
+        default: null
+    },
+    adresseLivraison: {
+        nom: {
+            type: String,
             trim: true
         },
         prenom: {
             type: String,
-            required: true,
-            trim: true
-        },
-        email: {
-            type: String,
-            required: true,
-            lowercase: true,
             trim: true
         },
         telephone: {
             type: String,
-            required: true,
             trim: true
         },
         adresse: {
             type: String,
-            required: true,
             trim: true
         },
         ville: {
@@ -40,261 +108,234 @@ const OrderSchema = new mongoose.Schema({
         },
         wilaya: {
             type: String,
-            required: true
+            trim: true
         },
         codePostal: {
             type: String,
             trim: true
         }
     },
-    articles: [{
-        id: {
-            type: String,
-            required: true
-        },
-        nom: {
-            type: String,
-            required: true
-        },
-        prix: {
-            type: Number,
-            required: true,
-            min: 0
-        },
-        quantite: {
-            type: Number,
-            required: true,
-            min: 1
-        },
-        sousTotal: {
-            type: Number,
-            required: true,
-            min: 0
-        },
-        image: {
-            type: String
-        },
-        categorie: {
-            type: String
-        },
-        marque: {
-            type: String
-        }
-    }],
-    sousTotal: {
-        type: Number,
-        required: true,
-        min: 0
-    },
-    fraisLivraison: {
-        type: Number,
-        required: true,
-        min: 0,
-        default: 0
-    },
-    remise: {
-        type: Number,
-        min: 0,
-        default: 0
-    },
-    total: {
-        type: Number,
-        required: true,
-        min: 0
-    },
-    statut: {
-        type: String,
-        required: true,
-        enum: ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'],
-        default: 'en-attente'
-    },
-    modePaiement: {
-        type: String,
-        required: true,
-        enum: ['Paiement à la livraison', 'Carte bancaire', 'Virement bancaire'],
-        default: 'Paiement à la livraison'
-    },
-    dateCommande: {
-        type: Date,
-        required: true,
-        default: Date.now
-    },
-    dateConfirmation: {
-        type: Date
-    },
-    dateExpedition: {
-        type: Date
-    },
-    dateLivraison: {
-        type: Date
-    },
-    dateAnnulation: {
-        type: Date
-    },
     commentaires: {
         type: String,
-        trim: true
+        trim: true,
+        maxlength: [1000, 'Les commentaires ne peuvent pas dépasser 1000 caractères']
     },
     commentairesAdmin: {
         type: String,
-        trim: true
+        trim: true,
+        maxlength: [500, 'Les commentaires admin ne peuvent pas dépasser 500 caractères']
     },
-    deviceInfo: {
-        userAgent: String,
-        platform: String,
-        ip: String
-    },
-    source: {
+    numeroSuivi: {
         type: String,
-        enum: ['web', 'mobile', 'api'],
-        default: 'web'
+        trim: true,
+        default: null
+    },
+    transporteur: {
+        type: String,
+        trim: true,
+        default: 'Livraison locale'
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
 });
 
-// Indexes for performance and search
+// Indexes pour améliorer les performances
+OrderSchema.index({ client: 1, dateCommande: -1 });
 OrderSchema.index({ numeroCommande: 1 });
-OrderSchema.index({ 'client.email': 1 });
 OrderSchema.index({ statut: 1 });
 OrderSchema.index({ dateCommande: -1 });
-OrderSchema.index({ 'client.nom': 'text', 'client.prenom': 'text', 'client.email': 'text', numeroCommande: 'text' });
+OrderSchema.index({ 'client': 1, 'statut': 1 });
 
-// Generate order number automatically
-OrderSchema.pre('save', async function(next) {
-    if (this.isNew && !this.numeroCommande) {
-        const date = new Date();
-        const year = date.getFullYear().toString().slice(-2);
-        const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        const day = date.getDate().toString().padStart(2, '0');
-        
-        // Find the last order number for today
-        const startOfDay = new Date(date.setHours(0, 0, 0, 0));
-        const endOfDay = new Date(date.setHours(23, 59, 59, 999));
-        
-        const lastOrder = await this.constructor.findOne({
-            dateCommande: { $gte: startOfDay, $lte: endOfDay }
-        }).sort({ numeroCommande: -1 });
-        
-        let sequence = 1;
-        if (lastOrder && lastOrder.numeroCommande) {
-            const lastSequence = parseInt(lastOrder.numeroCommande.slice(-3));
-            sequence = lastSequence + 1;
-        }
-        
-        this.numeroCommande = `SH${year}${month}${day}${sequence.toString().padStart(3, '0')}`;
-    }
-    next();
+// Virtual pour le numéro de commande formaté
+OrderSchema.virtual('numeroFormate').get(function() {
+    return `#${this.numeroCommande}`;
 });
 
-// Calculate totals before saving
-OrderSchema.pre('save', function(next) {
-    // Calculate sous-total from articles
-    this.sousTotal = this.articles.reduce((total, article) => {
-        article.sousTotal = article.prix * article.quantite;
-        return total + article.sousTotal;
+// Virtual pour le délai de livraison
+OrderSchema.virtual('delaiLivraison').get(function() {
+    if (this.dateLivraison && this.dateCommande) {
+        const diffTime = Math.abs(this.dateLivraison - this.dateCommande);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return diffDays;
+    }
+    return null;
+});
+
+// Virtual pour le statut en français
+OrderSchema.virtual('statutFrancais').get(function() {
+    const statutsMap = {
+        'en-attente': 'En attente',
+        'confirmée': 'Confirmée',
+        'préparée': 'Préparée',
+        'expédiée': 'Expédiée',
+        'livrée': 'Livrée',
+        'annulée': 'Annulée'
+    };
+    return statutsMap[this.statut] || this.statut;
+});
+
+// Méthode pour calculer le total
+OrderSchema.methods.calculerTotal = function() {
+    const sousTotal = this.articles.reduce((total, article) => {
+        return total + (article.prix * article.quantite);
     }, 0);
     
-    // Calculate total
-    this.total = this.sousTotal + this.fraisLivraison - (this.remise || 0);
+    this.sousTotal = sousTotal;
+    this.total = sousTotal + this.fraisLivraison;
     
-    // Ensure total is not negative
-    if (this.total < 0) this.total = 0;
+    return this.total;
+};
+
+// Méthode pour mettre à jour le statut
+OrderSchema.methods.mettreAJourStatut = function(nouveauStatut) {
+    const statutsValides = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
     
-    next();
-});
-
-// Update status dates
-OrderSchema.pre('save', function(next) {
-    if (this.isModified('statut')) {
-        const now = new Date();
-        
-        switch (this.statut) {
-            case 'confirmée':
-                if (!this.dateConfirmation) this.dateConfirmation = now;
-                break;
-            case 'expédiée':
-                if (!this.dateExpedition) this.dateExpedition = now;
-                break;
-            case 'livrée':
-                if (!this.dateLivraison) this.dateLivraison = now;
-                break;
-            case 'annulée':
-                if (!this.dateAnnulation) this.dateAnnulation = now;
-                break;
-        }
+    if (!statutsValides.includes(nouveauStatut)) {
+        throw new Error('Statut invalide');
     }
-    next();
-});
-
-// Instance methods
-OrderSchema.methods.canBeCancelled = function() {
-    return ['en-attente', 'confirmée'].includes(this.statut);
-};
-
-OrderSchema.methods.canBeModified = function() {
-    return ['en-attente'].includes(this.statut);
-};
-
-OrderSchema.methods.updateStatus = function(newStatus, commentaire = null) {
-    this.statut = newStatus;
-    if (commentaire) {
-        this.commentairesAdmin = commentaire;
-    }
-};
-
-// Virtual for full client name
-OrderSchema.virtual('client.nomComplet').get(function() {
-    return `${this.client.prenom} ${this.client.nom}`;
-});
-
-// Virtual for order duration
-OrderSchema.virtual('dureeCommande').get(function() {
-    const endDate = this.dateLivraison || new Date();
-    return Math.ceil((endDate - this.dateCommande) / (1000 * 60 * 60 * 24));
-});
-
-// Static methods
-OrderSchema.statics.findByStatus = function(statut) {
-    return this.find({ statut }).sort({ dateCommande: -1 });
-};
-
-OrderSchema.statics.findByClient = function(email) {
-    return this.find({ 'client.email': email.toLowerCase() }).sort({ dateCommande: -1 });
-};
-
-OrderSchema.statics.findByDateRange = function(startDate, endDate) {
-    return this.find({
-        dateCommande: {
-            $gte: startDate,
-            $lte: endDate
-        }
-    }).sort({ dateCommande: -1 });
-};
-
-OrderSchema.statics.getStats = function() {
-    return this.aggregate([
-        {
-            $group: {
-                _id: '$statut',
-                count: { $sum: 1 },
-                totalAmount: { $sum: '$total' }
+    
+    this.statut = nouveauStatut;
+    
+    // Définir automatiquement les dates selon le statut
+    switch (nouveauStatut) {
+        case 'expédiée':
+            if (!this.dateExpedition) {
+                this.dateExpedition = new Date();
             }
-        }
-    ]);
+            break;
+        case 'livrée':
+            if (!this.dateLivraison) {
+                this.dateLivraison = new Date();
+            }
+            break;
+    }
+    
+    return this.save();
 };
 
-OrderSchema.statics.searchOrders = function(query, limit = 50) {
-    const searchRegex = new RegExp(query, 'i');
-    return this.find({
-        $or: [
-            { numeroCommande: searchRegex },
-            { 'client.nom': searchRegex },
-            { 'client.prenom': searchRegex },
-            { 'client.email': searchRegex },
-            { 'client.telephone': searchRegex }
-        ]
-    }).sort({ dateCommande: -1 }).limit(limit);
+// Méthode pour ajouter un commentaire admin
+OrderSchema.methods.ajouterCommentaireAdmin = function(commentaire) {
+    const timestamp = new Date().toLocaleString('fr-FR');
+    const nouveauCommentaire = `[${timestamp}] ${commentaire}`;
+    
+    if (this.commentairesAdmin) {
+        this.commentairesAdmin += '\n' + nouveauCommentaire;
+    } else {
+        this.commentairesAdmin = nouveauCommentaire;
+    }
+    
+    return this.save();
 };
+
+// Méthode pour générer un numéro de suivi
+OrderSchema.methods.genererNumeroSuivi = function() {
+    if (!this.numeroSuivi) {
+        const prefix = 'SHF';
+        const timestamp = Date.now().toString().slice(-6);
+        const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+        this.numeroSuivi = `${prefix}${timestamp}${random}`;
+    }
+    return this.numeroSuivi;
+};
+
+// Méthode statique pour obtenir les commandes par statut
+OrderSchema.statics.obtenirParStatut = function(statut) {
+    return this.find({ statut })
+        .populate('client', 'nom prenom email telephone wilaya')
+        .sort({ dateCommande: -1 });
+};
+
+// Méthode statique pour obtenir les commandes récentes
+OrderSchema.statics.obtenirRecentes = function(limite = 10) {
+    return this.find()
+        .populate('client', 'nom prenom email telephone')
+        .sort({ dateCommande: -1 })
+        .limit(limite);
+};
+
+// Méthode statique pour obtenir les statistiques
+OrderSchema.statics.obtenirStatistiques = async function() {
+    try {
+        const maintenant = new Date();
+        const debutMois = new Date(maintenant.getFullYear(), maintenant.getMonth(), 1);
+        const debutSemaine = new Date(maintenant.setDate(maintenant.getDate() - maintenant.getDay()));
+        
+        const [
+            totalCommandes,
+            commandesEnAttente,
+            commandesConfirmees,
+            commandesLivrees,
+            revenusAgg
+        ] = await Promise.all([
+            this.countDocuments(),
+            this.countDocuments({ statut: 'en-attente' }),
+            this.countDocuments({ statut: 'confirmée' }),
+            this.countDocuments({ statut: 'livrée' }),
+            this.aggregate([
+                {
+                    $match: {
+                        dateCommande: { $gte: debutMois },
+                        statut: { $nin: ['annulée'] }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        revenusTotal: { $sum: '$total' },
+                        nombreCommandes: { $sum: 1 }
+                    }
+                }
+            ])
+        ]);
+        
+        const revenus = revenusAgg.length > 0 ? revenusAgg[0].revenusTotal : 0;
+        const commandesMois = revenusAgg.length > 0 ? revenusAgg[0].nombreCommandes : 0;
+        
+        return {
+            totalCommandes,
+            commandesEnAttente,
+            commandesConfirmees,
+            commandesLivrees,
+            revenus,
+            commandesMois
+        };
+    } catch (error) {
+        throw new Error('Erreur lors du calcul des statistiques: ' + error.message);
+    }
+};
+
+// Middleware pre-save pour valider et calculer
+OrderSchema.pre('save', function(next) {
+    // Recalculer le total si les articles ou frais de livraison ont changé
+    if (this.isModified('articles') || this.isModified('fraisLivraison')) {
+        this.calculerTotal();
+    }
+    
+    // Valider que le total correspond au calcul
+    const totalCalcule = this.sousTotal + this.fraisLivraison;
+    if (Math.abs(this.total - totalCalcule) > 0.01) {
+        return next(new Error('Le total ne correspond pas au calcul'));
+    }
+    
+    // Générer numéro de suivi si expédiée
+    if (this.statut === 'expédiée' && !this.numeroSuivi) {
+        this.genererNumeroSuivi();
+    }
+    
+    next();
+});
+
+// Middleware post-save pour logging
+OrderSchema.post('save', function(doc) {
+    console.log(`✅ Commande ${doc.numeroCommande} sauvegardée avec statut: ${doc.statut}`);
+});
+
+// Middleware pre-remove pour logging
+OrderSchema.pre('remove', function(next) {
+    console.log(`🗑️ Suppression de la commande: ${this.numeroCommande}`);
+    next();
+});
 
 module.exports = mongoose.model('Order', OrderSchema);

@@ -1,40 +1,22 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const path = require('path');
 require('dotenv').config();
 
 const app = express();
 
-// CORS configuration - FIXED
-const corsOptions = {
-    origin: [
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:3001',
-        'http://localhost:5173',
-        'https://parapharmacieshifa.com',
-        'http://parapharmacieshifa.com'
-    ],
-    credentials: false,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: [
-        'Content-Type', 
-        'Authorization', 
-        'x-auth-token',
-        'Origin',
-        'X-Requested-With',
-        'Accept'
-    ]
-};
+console.log('🚀 Starting minimal server for debugging...');
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// CORS configuration
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token']
+}));
 
 // Basic middleware
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -42,33 +24,33 @@ app.use((req, res, next) => {
     next();
 });
 
-// ROOT ROUTE
+// Basic routes for testing
 app.get('/', (req, res) => {
     res.json({
-        message: 'Shifa Parapharmacie Backend API',
+        message: 'Minimal Shifa Backend API',
         status: 'running',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
+        timestamp: new Date().toISOString()
     });
 });
 
-// Health check
 app.get('/api/health', (req, res) => {
     res.json({
         message: 'API is healthy',
         timestamp: new Date().toISOString(),
-        status: 'running',
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
-// MongoDB Connection
+// Test MongoDB connection
 const connectDB = async () => {
     try {
-        console.log('Connecting to MongoDB...');
+        console.log('🔗 Attempting MongoDB connection...');
+        console.log('📍 MongoDB URI exists:', !!process.env.MONGODB_URI);
         
         if (!process.env.MONGODB_URI) {
-            throw new Error('MONGODB_URI not set in environment variables');
+            console.error('❌ MONGODB_URI not found in environment variables');
+            return;
         }
         
         await mongoose.connect(process.env.MONGODB_URI, {
@@ -76,198 +58,172 @@ const connectDB = async () => {
             useUnifiedTopology: true
         });
         
-        console.log('✅ MongoDB connected');
+        console.log('✅ MongoDB connected successfully');
         
-        // Initialize admin user after DB connection
-        await initializeAdmin();
+        // Test creating admin user
+        await createTestAdmin();
         
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error.message);
-        // Retry connection after 10 seconds
-        setTimeout(connectDB, 10000);
     }
 };
 
-// Initialize admin user
-async function initializeAdmin() {
+// Create test admin
+const createTestAdmin = async () => {
     try {
-        const User = require('./models/User');
         const bcrypt = require('bcryptjs');
         
+        // Simple user schema for testing
+        const userSchema = new mongoose.Schema({
+            nom: String,
+            prenom: String,
+            email: { type: String, unique: true },
+            password: String,
+            role: { type: String, default: 'user' },
+            actif: { type: Boolean, default: true },
+            telephone: String,
+            wilaya: String,
+            dateInscription: { type: Date, default: Date.now }
+        });
+        
+        const User = mongoose.model('User', userSchema);
+        
         let admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
+        
         if (!admin) {
-            const salt = bcrypt.genSaltSync(12);
-            const hashedPassword = bcrypt.hashSync('anesaya75', salt);
+            const hashedPassword = await bcrypt.hash('anesaya75', 12);
             
             admin = new User({
                 nom: 'Gaher',
-                prenom: 'Parapharmacie',
+                prenom: 'Admin',
                 email: 'pharmaciegaher@gmail.com',
-                telephone: '+213123456789',
-                adresse: 'Tipaza, Algérie',
-                wilaya: 'Tipaza',
                 password: hashedPassword,
-                role: 'admin'
+                role: 'admin',
+                telephone: '+213123456789',
+                wilaya: 'Tipaza'
             });
             
             await admin.save();
-            console.log('✅ Admin user created successfully');
+            console.log('✅ Test admin user created');
         } else {
-            console.log('✅ Admin user already exists');
+            console.log('✅ Test admin user already exists');
         }
+        
     } catch (error) {
-        console.log('⚠️ Admin creation skipped:', error.message);
+        console.error('❌ Error creating test admin:', error.message);
     }
-}
+};
 
-// Connect to database first
-connectDB();
-
-// ROUTE LOADING - Load routes after DB connection attempt
-console.log('Loading API routes...');
-
-// Auth routes
-try {
-    const authRoutes = require('./routes/auth');
-    app.use('/api/auth', authRoutes);
-    console.log('✅ Auth routes loaded at /api/auth');
-} catch (error) {
-    console.error('❌ Auth routes failed to load:', error.message);
-    // Create minimal auth route for debugging
-    app.get('/api/auth/test', (req, res) => {
-        res.json({ message: 'Auth route working but auth.js file may be missing', error: error.message });
-    });
-}
-
-// Product routes
-try {
-    const productRoutes = require('./routes/products');
-    app.use('/api/products', productRoutes);
-    console.log('✅ Product routes loaded at /api/products');
-} catch (error) {
-    console.error('❌ Product routes failed to load:', error.message);
-    app.get('/api/products/test', (req, res) => {
-        res.json({ message: 'Product route placeholder', error: error.message });
-    });
-}
-
-// Order routes
-try {
-    const orderRoutes = require('./routes/orders');
-    app.use('/api/orders', orderRoutes);
-    console.log('✅ Order routes loaded at /api/orders');
-} catch (error) {
-    console.error('❌ Order routes failed to load:', error.message);
-    app.get('/api/orders/test', (req, res) => {
-        res.json({ message: 'Order route placeholder', error: error.message });
-    });
-}
-
-// Admin routes
-try {
-    const adminRoutes = require('./routes/admin');
-    app.use('/api/admin', adminRoutes);
-    console.log('✅ Admin routes loaded at /api/admin');
-} catch (error) {
-    console.error('❌ Admin routes failed to load:', error.message);
-    app.get('/api/admin/test', (req, res) => {
-        res.json({ message: 'Admin route placeholder', error: error.message });
-    });
-}
-
-// Settings routes (optional)
-try {
-    const settingsRoutes = require('./routes/settings');
-    app.use('/api/settings', settingsRoutes);
-    console.log('✅ Settings routes loaded at /api/settings');
-} catch (error) {
-    console.log('⚠️ Settings routes not found (optional)');
-}
-
-// Debug route to show all available routes
-app.get('/api/routes', (req, res) => {
-    const routes = [];
-    
-    app._router.stack.forEach((middleware) => {
-        if (middleware.route) {
-            routes.push({
-                path: middleware.route.path,
-                methods: Object.keys(middleware.route.methods)
-            });
-        } else if (middleware.name === 'router') {
-            middleware.handle.stack.forEach((handler) => {
-                if (handler.route) {
-                    routes.push({
-                        path: handler.route.path,
-                        methods: Object.keys(handler.route.methods)
-                    });
-                }
+// Simple auth routes for testing
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        console.log('🔐 Login attempt:', req.body.email);
+        
+        const { email, password } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({
+                message: 'Email et mot de passe requis'
             });
         }
-    });
-    
+        
+        // Check if we have the User model
+        const User = mongoose.model('User');
+        
+        const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+        
+        if (!user) {
+            return res.status(401).json({
+                message: 'Email ou mot de passe incorrect'
+            });
+        }
+        
+        // Simple password check
+        const bcrypt = require('bcryptjs');
+        const isMatch = await bcrypt.compare(password, user.password);
+        
+        if (!isMatch) {
+            return res.status(401).json({
+                message: 'Email ou mot de passe incorrect'
+            });
+        }
+        
+        // Simple token generation
+        const jwt = require('jsonwebtoken');
+        const token = jwt.sign(
+            { id: user._id }, 
+            process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024',
+            { expiresIn: '30d' }
+        );
+        
+        console.log('✅ Login successful for:', user.email);
+        
+        res.json({
+            message: 'Connexion réussie',
+            token,
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                role: user.role
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Login error:', error);
+        res.status(500).json({
+            message: 'Erreur serveur lors de la connexion',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/auth/test', (req, res) => {
     res.json({
-        message: 'Available API routes',
-        routes: routes,
-        baseUrl: req.protocol + '://' + req.get('host')
+        message: 'Auth route is working!',
+        timestamp: new Date().toISOString()
     });
 });
 
-// Catch-all route for debugging
-app.use('/api/*', (req, res) => {
-    console.log(`❌ Route not found: ${req.method} ${req.path}`);
-    res.status(404).json({
-        message: 'Route non trouvée',
-        path: req.originalUrl,
-        method: req.method,
-        timestamp: new Date().toISOString(),
-        suggestion: 'Check /api/routes for available endpoints'
+// List environment variables (safely)
+app.get('/api/debug/env', (req, res) => {
+    res.json({
+        hasMongoURI: !!process.env.MONGODB_URI,
+        hasJWTSecret: !!process.env.JWT_SECRET,
+        nodeEnv: process.env.NODE_ENV,
+        port: process.env.PORT
     });
 });
 
-// Error handling middleware
+// Error handling
 app.use((error, req, res, next) => {
     console.error('💥 Server error:', error);
     res.status(500).json({ 
-        message: 'Erreur serveur interne',
-        timestamp: new Date().toISOString(),
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        message: 'Erreur serveur',
+        error: error.message
     });
 });
 
-// 404 handler for non-API routes
+// 404 handler
 app.use('*', (req, res) => {
+    console.log('❌ Route not found:', req.originalUrl);
     res.status(404).json({
-        message: 'Endpoint non trouvé',
-        path: req.originalUrl,
-        timestamp: new Date().toISOString(),
-        availableEndpoints: ['/api/health', '/api/routes', '/api/auth', '/api/products', '/api/orders', '/api/admin']
+        message: 'Route non trouvée',
+        path: req.originalUrl
     });
 });
+
+// Connect to database
+connectDB();
 
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🚀 Minimal server running on port ${PORT}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🔗 Available routes: http://localhost:${PORT}/api/routes`);
-    console.log(`📋 Auth endpoints: http://localhost:${PORT}/api/auth`);
-});
-
-// Handle process termination
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down gracefully');
-    mongoose.connection.close(() => {
-        console.log('MongoDB connection closed');
-        process.exit(0);
-    });
-});
-
-process.on('SIGINT', () => {
-    console.log('SIGINT received, shutting down gracefully');
-    mongoose.connection.close(() => {
-        console.log('MongoDB connection closed');
-        process.exit(0);
-    });
+    console.log(`🔗 Test endpoints:`);
+    console.log(`   - Health: http://localhost:${PORT}/api/health`);
+    console.log(`   - Auth test: http://localhost:${PORT}/api/auth/test`);
+    console.log(`   - Debug env: http://localhost:${PORT}/api/debug/env`);
 });

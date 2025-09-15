@@ -47,7 +47,8 @@ app.get('/', (req, res) => {
     res.json({
         message: 'Shifa Parapharmacie Backend API',
         status: 'running',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        version: '1.0.0'
     });
 });
 
@@ -56,50 +57,10 @@ app.get('/api/health', (req, res) => {
     res.json({
         message: 'API is healthy',
         timestamp: new Date().toISOString(),
-        status: 'running'
+        status: 'running',
+        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
     });
 });
-
-// DIRECT ROUTE LOADING - NO FUNCTIONS
-try {
-    const authRoutes = require('./routes/auth');
-    app.use('/api/auth', authRoutes);
-    console.log('✅ Auth routes loaded');
-} catch (error) {
-    console.error('❌ Auth routes failed:', error.message);
-}
-
-try {
-    const productRoutes = require('./routes/products');
-    app.use('/api/products', productRoutes);
-    console.log('✅ Product routes loaded');
-} catch (error) {
-    console.error('❌ Product routes failed:', error.message);
-}
-
-try {
-    const orderRoutes = require('./routes/orders');
-    app.use('/api/orders', orderRoutes);
-    console.log('✅ Order routes loaded');
-} catch (error) {
-    console.error('❌ Order routes failed:', error.message);
-}
-
-try {
-    const adminRoutes = require('./routes/admin');
-    app.use('/api/admin', adminRoutes);
-    console.log('✅ Admin routes loaded');
-} catch (error) {
-    console.error('❌ Admin routes failed:', error.message);
-}
-
-try {
-    const settingsRoutes = require('./routes/settings');
-    app.use('/api/settings', settingsRoutes);
-    console.log('✅ Settings routes loaded');
-} catch (error) {
-    console.error('❌ Settings routes failed:', error.message);
-}
 
 // MongoDB Connection
 const connectDB = async () => {
@@ -107,7 +68,7 @@ const connectDB = async () => {
         console.log('Connecting to MongoDB...');
         
         if (!process.env.MONGODB_URI) {
-            throw new Error('MONGODB_URI not set');
+            throw new Error('MONGODB_URI not set in environment variables');
         }
         
         await mongoose.connect(process.env.MONGODB_URI, {
@@ -117,11 +78,12 @@ const connectDB = async () => {
         
         console.log('✅ MongoDB connected');
         
-        // Initialize admin user
+        // Initialize admin user after DB connection
         await initializeAdmin();
         
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error.message);
+        // Retry connection after 10 seconds
         setTimeout(connectDB, 10000);
     }
 };
@@ -149,38 +111,163 @@ async function initializeAdmin() {
             });
             
             await admin.save();
-            console.log('✅ Admin user created');
+            console.log('✅ Admin user created successfully');
+        } else {
+            console.log('✅ Admin user already exists');
         }
     } catch (error) {
-        console.log('Admin creation skipped:', error.message);
+        console.log('⚠️ Admin creation skipped:', error.message);
     }
 }
 
-// Error handling
-app.use((error, req, res, next) => {
-    console.error('Server error:', error);
-    res.status(500).json({ 
-        message: 'Erreur serveur',
-        timestamp: new Date().toISOString()
+// Connect to database first
+connectDB();
+
+// ROUTE LOADING - Load routes after DB connection attempt
+console.log('Loading API routes...');
+
+// Auth routes
+try {
+    const authRoutes = require('./routes/auth');
+    app.use('/api/auth', authRoutes);
+    console.log('✅ Auth routes loaded at /api/auth');
+} catch (error) {
+    console.error('❌ Auth routes failed to load:', error.message);
+    // Create minimal auth route for debugging
+    app.get('/api/auth/test', (req, res) => {
+        res.json({ message: 'Auth route working but auth.js file may be missing', error: error.message });
+    });
+}
+
+// Product routes
+try {
+    const productRoutes = require('./routes/products');
+    app.use('/api/products', productRoutes);
+    console.log('✅ Product routes loaded at /api/products');
+} catch (error) {
+    console.error('❌ Product routes failed to load:', error.message);
+    app.get('/api/products/test', (req, res) => {
+        res.json({ message: 'Product route placeholder', error: error.message });
+    });
+}
+
+// Order routes
+try {
+    const orderRoutes = require('./routes/orders');
+    app.use('/api/orders', orderRoutes);
+    console.log('✅ Order routes loaded at /api/orders');
+} catch (error) {
+    console.error('❌ Order routes failed to load:', error.message);
+    app.get('/api/orders/test', (req, res) => {
+        res.json({ message: 'Order route placeholder', error: error.message });
+    });
+}
+
+// Admin routes
+try {
+    const adminRoutes = require('./routes/admin');
+    app.use('/api/admin', adminRoutes);
+    console.log('✅ Admin routes loaded at /api/admin');
+} catch (error) {
+    console.error('❌ Admin routes failed to load:', error.message);
+    app.get('/api/admin/test', (req, res) => {
+        res.json({ message: 'Admin route placeholder', error: error.message });
+    });
+}
+
+// Settings routes (optional)
+try {
+    const settingsRoutes = require('./routes/settings');
+    app.use('/api/settings', settingsRoutes);
+    console.log('✅ Settings routes loaded at /api/settings');
+} catch (error) {
+    console.log('⚠️ Settings routes not found (optional)');
+}
+
+// Debug route to show all available routes
+app.get('/api/routes', (req, res) => {
+    const routes = [];
+    
+    app._router.stack.forEach((middleware) => {
+        if (middleware.route) {
+            routes.push({
+                path: middleware.route.path,
+                methods: Object.keys(middleware.route.methods)
+            });
+        } else if (middleware.name === 'router') {
+            middleware.handle.stack.forEach((handler) => {
+                if (handler.route) {
+                    routes.push({
+                        path: handler.route.path,
+                        methods: Object.keys(handler.route.methods)
+                    });
+                }
+            });
+        }
+    });
+    
+    res.json({
+        message: 'Available API routes',
+        routes: routes,
+        baseUrl: req.protocol + '://' + req.get('host')
     });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
+// Catch-all route for debugging
+app.use('/api/*', (req, res) => {
+    console.log(`❌ Route not found: ${req.method} ${req.path}`);
     res.status(404).json({
         message: 'Route non trouvée',
         path: req.originalUrl,
-        timestamp: new Date().toISOString()
+        method: req.method,
+        timestamp: new Date().toISOString(),
+        suggestion: 'Check /api/routes for available endpoints'
     });
 });
 
-// Connect to database
-connectDB();
+// Error handling middleware
+app.use((error, req, res, next) => {
+    console.error('💥 Server error:', error);
+    res.status(500).json({ 
+        message: 'Erreur serveur interne',
+        timestamp: new Date().toISOString(),
+        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+});
+
+// 404 handler for non-API routes
+app.use('*', (req, res) => {
+    res.status(404).json({
+        message: 'Endpoint non trouvé',
+        path: req.originalUrl,
+        timestamp: new Date().toISOString(),
+        availableEndpoints: ['/api/health', '/api/routes', '/api/auth', '/api/products', '/api/orders', '/api/admin']
+    });
+});
 
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Health: http://localhost:${PORT}/api/health`);
+    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🔗 Available routes: http://localhost:${PORT}/api/routes`);
+    console.log(`📋 Auth endpoints: http://localhost:${PORT}/api/auth`);
+});
+
+// Handle process termination
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully');
+    mongoose.connection.close(() => {
+        console.log('MongoDB connection closed');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('SIGINT received, shutting down gracefully');
+    mongoose.connection.close(() => {
+        console.log('MongoDB connection closed');
+        process.exit(0);
+    });
 });

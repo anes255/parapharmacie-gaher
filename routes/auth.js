@@ -1,302 +1,55 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const auth = require('../middleware/auth');
+const User = require('../models/User');
+
 const router = express.Router();
 
-// Generate JWT Token
-const generateToken = (id) => {
-    const jwt = require('jsonwebtoken');
-    return jwt.sign({ id }, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024', {
-        expiresIn: '30d'
-    });
-};
-
-// @route   POST /api/auth/login
-// @desc    Login user with comprehensive error handling
-// @access  Public
-router.post('/login', async (req, res) => {
-    try {
-        console.log('🔐 Login attempt started...');
-        console.log('📧 Email received:', req.body.email);
-        
-        const { email, password } = req.body;
-        
-        // Step 1: Basic validation
-        if (!email || !password) {
-            console.log('❌ Missing email or password');
-            return res.status(400).json({
-                message: 'Email et mot de passe requis',
-                step: 'validation'
-            });
-        }
-        
-        // Step 2: Check dependencies
-        try {
-            const bcrypt = require('bcryptjs');
-            console.log('✅ bcryptjs dependency available');
-        } catch (depError) {
-            console.error('❌ bcryptjs dependency missing:', depError.message);
-            return res.status(500).json({
-                message: 'Erreur de configuration serveur - dépendance manquante',
-                step: 'dependencies',
-                error: 'bcryptjs not found'
-            });
-        }
-        
-        // Step 3: Check User model
-        let User;
-        try {
-            User = require('../models/User');
-            console.log('✅ User model loaded');
-        } catch (modelError) {
-            console.error('❌ User model not found:', modelError.message);
-            
-            // Emergency admin check for testing
-            if (email.toLowerCase() === 'pharmaciegaher@gmail.com' && password === 'anesaya75') {
-                console.log('🚨 Emergency admin login (no database)');
-                const token = generateToken('emergency_admin');
-                return res.json({
-                    message: 'Connexion réussie (mode urgence)',
-                    token,
-                    user: {
-                        id: 'emergency_admin',
-                        nom: 'Gaher',
-                        prenom: 'Admin',
-                        email: 'pharmaciegaher@gmail.com',
-                        role: 'admin'
-                    },
-                    mode: 'emergency'
-                });
-            }
-            
-            return res.status(500).json({
-                message: 'Erreur de configuration serveur - modèle utilisateur manquant',
-                step: 'model',
-                error: modelError.message
-            });
-        }
-        
-        // Step 4: Database query
-        let user;
-        try {
-            console.log('🔍 Searching for user in database...');
-            user = await User.findOne({ 
-                email: email.toLowerCase(),
-                actif: true 
-            }).select('+password');
-            
-            if (!user) {
-                console.log('❌ User not found in database');
-                return res.status(401).json({
-                    message: 'Email ou mot de passe incorrect',
-                    step: 'user_lookup'
-                });
-            }
-            
-            console.log('✅ User found:', user.email, 'Role:', user.role);
-            
-        } catch (dbError) {
-            console.error('❌ Database query failed:', dbError.message);
-            
-            // Emergency admin check for database errors
-            if (email.toLowerCase() === 'pharmaciegaher@gmail.com' && password === 'anesaya75') {
-                console.log('🚨 Emergency admin login (database error)');
-                const token = generateToken('emergency_admin');
-                return res.json({
-                    message: 'Connexion réussie (mode urgence - erreur base de données)',
-                    token,
-                    user: {
-                        id: 'emergency_admin',
-                        nom: 'Gaher',
-                        prenom: 'Admin',
-                        email: 'pharmaciegaher@gmail.com',
-                        role: 'admin'
-                    },
-                    mode: 'emergency_db_error'
-                });
-            }
-            
-            return res.status(500).json({
-                message: 'Erreur de base de données lors de la connexion',
-                step: 'database',
-                error: dbError.message
-            });
-        }
-        
-        // Step 5: Password verification
-        try {
-            const bcrypt = require('bcryptjs');
-            const isMatch = await bcrypt.compare(password, user.password);
-            
-            if (!isMatch) {
-                console.log('❌ Password mismatch for user:', user.email);
-                return res.status(401).json({
-                    message: 'Email ou mot de passe incorrect',
-                    step: 'password_verification'
-                });
-            }
-            
-            console.log('✅ Password verified for user:', user.email);
-            
-        } catch (bcryptError) {
-            console.error('❌ Password verification failed:', bcryptError.message);
-            return res.status(500).json({
-                message: 'Erreur lors de la vérification du mot de passe',
-                step: 'password_check',
-                error: bcryptError.message
-            });
-        }
-        
-        // Step 6: Generate token
-        let token;
-        try {
-            token = generateToken(user._id);
-            console.log('✅ Token generated successfully');
-        } catch (tokenError) {
-            console.error('❌ Token generation failed:', tokenError.message);
-            return res.status(500).json({
-                message: 'Erreur lors de la génération du token',
-                step: 'token_generation',
-                error: tokenError.message
-            });
-        }
-        
-        // Step 7: Update last connection
-        try {
-            if (user.updateLastConnection) {
-                await user.updateLastConnection();
-            } else {
-                user.dernierConnexion = new Date();
-                await user.save();
-            }
-            console.log('✅ Last connection updated');
-        } catch (updateError) {
-            console.log('⚠️ Could not update last connection:', updateError.message);
-            // Don't fail login for this
-        }
-        
-        // Step 8: Success response
-        console.log('✅ Login successful for:', user.email, 'Role:', user.role);
-        
-        res.json({
-            message: 'Connexion réussie',
-            token,
-            user: {
-                id: user._id,
-                nom: user.nom,
-                prenom: user.prenom,
-                email: user.email,
-                telephone: user.telephone,
-                adresse: user.adresse,
-                ville: user.ville,
-                wilaya: user.wilaya,
-                role: user.role,
-                dateInscription: user.dateInscription,
-                dernierConnexion: user.dernierConnexion
-            },
-            step: 'success'
-        });
-        
-    } catch (error) {
-        console.error('❌ Unexpected login error:', error);
-        console.error('❌ Error stack:', error.stack);
-        
-        // Emergency admin check for any unexpected errors
-        if (req.body.email?.toLowerCase() === 'pharmaciegaher@gmail.com' && req.body.password === 'anesaya75') {
-            console.log('🚨 Emergency admin login (unexpected error)');
-            const token = generateToken('emergency_admin');
-            return res.json({
-                message: 'Connexion réussie (mode urgence - erreur inattendue)',
-                token,
-                user: {
-                    id: 'emergency_admin',
-                    nom: 'Gaher',
-                    prenom: 'Admin',
-                    email: 'pharmaciegaher@gmail.com',
-                    role: 'admin'
-                },
-                mode: 'emergency_unexpected'
-            });
-        }
-        
-        res.status(500).json({
-            message: 'Erreur serveur lors de la connexion',
-            step: 'unexpected_error',
-            error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
-    }
-});
-
-// @route   POST /api/auth/register
-// @desc    Register user
-// @access  Public
+// Register user
 router.post('/register', async (req, res) => {
     try {
-        console.log('📝 Registration attempt:', req.body.email);
-        
-        const { nom, prenom, email, password, telephone, adresse, ville, wilaya, codePostal } = req.body;
+        const { nom, prenom, email, password, telephone, adresse, wilaya } = req.body;
         
         // Validation
-        if (!nom || !prenom || !email || !password || !telephone || !wilaya) {
-            return res.status(400).json({
-                message: 'Veuillez remplir tous les champs obligatoires'
-            });
+        if (!nom || !prenom || !email || !password || !telephone || !adresse || !wilaya) {
+            return res.status(400).json({ message: 'Tous les champs sont obligatoires' });
         }
         
-        // Try to use User model
-        let User;
-        try {
-            User = require('../models/User');
-        } catch (error) {
-            return res.status(500).json({
-                message: 'Erreur de configuration serveur - modèle utilisateur manquant'
-            });
-        }
-        
-        // Check if user exists
-        const existingUser = await User.findOne({ email: email.toLowerCase() });
-        if (existingUser) {
-            return res.status(400).json({
-                message: 'Un utilisateur avec cet email existe déjà'
-            });
-        }
-        
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            return res.status(400).json({
-                message: 'Format d\'email invalide'
-            });
-        }
-        
-        // Validate password strength
         if (password.length < 6) {
-            return res.status(400).json({
-                message: 'Le mot de passe doit contenir au moins 6 caractères'
-            });
+            return res.status(400).json({ message: 'Le mot de passe doit contenir au moins 6 caractères' });
+        }
+        
+        // Check if user already exists
+        const existingUser = await User.findByEmail(email);
+        if (existingUser) {
+            return res.status(400).json({ message: 'Un utilisateur avec cet email existe déjà' });
         }
         
         // Create user
         const user = new User({
             nom: nom.trim(),
             prenom: prenom.trim(),
-            email: email.toLowerCase().trim(),
-            password, // Will be hashed by pre-save hook
-            telephone: telephone.replace(/\s+/g, ''),
-            adresse: adresse ? adresse.trim() : '',
-            ville: ville ? ville.trim() : '',
-            wilaya,
-            codePostal: codePostal ? codePostal.trim() : '',
-            dateInscription: new Date()
+            email: email.trim().toLowerCase(),
+            password,
+            telephone: telephone.trim(),
+            adresse: adresse.trim(),
+            wilaya: wilaya.trim()
         });
         
         await user.save();
-        console.log('✅ User registered successfully:', user.email);
         
-        // Generate token
-        const token = generateToken(user._id);
+        // Generate JWT token
+        const token = jwt.sign(
+            { id: user._id, email: user.email, role: user.role },
+            process.env.JWT_SECRET || 'your-secret-key',
+            { expiresIn: '7d' }
+        );
+        
+        console.log('User registered successfully:', user.email);
         
         res.status(201).json({
-            message: 'Inscription réussie',
+            success: true,
             token,
             user: {
                 id: user._id,
@@ -305,173 +58,258 @@ router.post('/register', async (req, res) => {
                 email: user.email,
                 telephone: user.telephone,
                 adresse: user.adresse,
-                ville: user.ville,
                 wilaya: user.wilaya,
-                role: user.role,
-                dateInscription: user.dateInscription
-            }
+                role: user.role
+            },
+            message: 'Compte créé avec succès'
         });
         
     } catch (error) {
-        console.error('❌ Registration error:', error);
+        console.error('Register error:', error);
         
         if (error.code === 11000) {
-            const field = Object.keys(error.keyPattern)[0];
-            return res.status(400).json({
-                message: `${field === 'email' ? 'Email' : 'Téléphone'} déjà utilisé`
-            });
+            return res.status(400).json({ message: 'Cet email est déjà utilisé' });
         }
         
         if (error.name === 'ValidationError') {
-            const messages = Object.values(error.errors).map(err => err.message);
-            return res.status(400).json({
-                message: messages[0] || 'Données invalides'
-            });
+            const errors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({ message: errors.join(', ') });
         }
         
-        res.status(500).json({
-            message: 'Erreur serveur lors de l\'inscription'
-        });
+        res.status(500).json({ message: 'Erreur lors de la création du compte' });
     }
 });
 
-// @route   GET /api/auth/profile
-// @desc    Get user profile
-// @access  Private
-router.get('/profile', async (req, res) => {
+// Login user
+router.post('/login', async (req, res) => {
     try {
-        // Simple auth check for profile
-        const token = req.header('x-auth-token');
-        if (!token) {
-            return res.status(401).json({ message: 'Token requis' });
+        const { email, password } = req.body;
+        
+        // Validation
+        if (!email || !password) {
+            return res.status(400).json({ message: 'Email et mot de passe requis' });
         }
         
-        const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-        
-        // Handle emergency admin
-        if (decoded.id === 'emergency_admin') {
-            return res.json({
-                id: 'emergency_admin',
-                nom: 'Gaher',
-                prenom: 'Admin',
-                email: 'pharmaciegaher@gmail.com',
-                role: 'admin'
-            });
+        // Find user
+        const user = await User.findByEmail(email);
+        if (!user) {
+            return res.status(400).json({ message: 'Email ou mot de passe incorrect' });
         }
         
-        const User = require('../models/User');
-        const user = await User.findById(decoded.id);
+        // Check if user is active
+        if (!user.actif) {
+            return res.status(400).json({ message: 'Compte désactivé' });
+        }
         
-        if (!user || !user.actif) {
+        // Check password
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Email ou mot de passe incorrect' });
+        }
+        
+        // Update last login
+        await user.updateLastLogin();
+        
+        // Generate JWT token
+        const token = jwt.sign(
+            { id: user._id, email: user.email, role: user.role },
+            process.env.JWT_SECRET || 'your-secret-key',
+            { expiresIn: '7d' }
+        );
+        
+        console.log('User logged in successfully:', user.email);
+        
+        res.json({
+            success: true,
+            token,
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                wilaya: user.wilaya,
+                role: user.role
+            },
+            message: 'Connexion réussie'
+        });
+        
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ message: 'Erreur lors de la connexion' });
+    }
+});
+
+// Get user profile
+router.get('/profile', auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('-password');
+        
+        if (!user) {
             return res.status(404).json({ message: 'Utilisateur non trouvé' });
         }
         
         res.json({
-            id: user._id,
-            nom: user.nom,
-            prenom: user.prenom,
-            email: user.email,
-            telephone: user.telephone,
-            adresse: user.adresse,
-            ville: user.ville,
-            wilaya: user.wilaya,
-            codePostal: user.codePostal,
-            role: user.role,
-            dateInscription: user.dateInscription,
-            dernierConnexion: user.dernierConnexion
+            success: true,
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                wilaya: user.wilaya,
+                role: user.role,
+                dateInscription: user.dateInscription,
+                derniereConnexion: user.derniereConnexion
+            }
         });
         
     } catch (error) {
-        console.error('❌ Profile error:', error);
+        console.error('Get profile error:', error);
         res.status(500).json({ message: 'Erreur serveur' });
     }
 });
 
-// @route   GET /api/auth/test
-// @desc    Test auth route
-// @access  Public
-router.get('/test', (req, res) => {
-    res.json({
-        message: 'Auth routes are working!',
-        timestamp: new Date().toISOString(),
-        endpoints: [
-            'POST /api/auth/login',
-            'POST /api/auth/register', 
-            'GET /api/auth/profile'
-        ],
-        testCredentials: {
-            email: 'pharmaciegaher@gmail.com',
-            password: 'anesaya75'
-        }
-    });
-});
-
-// @route   GET /api/auth/debug
-// @desc    Debug auth system
-// @access  Public
-router.get('/debug', async (req, res) => {
+// Update user profile
+router.put('/profile', auth, async (req, res) => {
     try {
-        const debug = {
-            timestamp: new Date().toISOString(),
-            dependencies: {},
-            models: {},
-            database: {},
-            environment: {}
-        };
+        const user = await User.findById(req.user.id);
         
-        // Check dependencies
-        try {
-            require('bcryptjs');
-            debug.dependencies.bcryptjs = 'available';
-        } catch (error) {
-            debug.dependencies.bcryptjs = 'missing';
+        if (!user) {
+            return res.status(404).json({ message: 'Utilisateur non trouvé' });
         }
         
-        try {
-            require('jsonwebtoken');
-            debug.dependencies.jsonwebtoken = 'available';
-        } catch (error) {
-            debug.dependencies.jsonwebtoken = 'missing';
-        }
+        // Update allowed fields
+        const allowedUpdates = ['nom', 'prenom', 'telephone', 'adresse', 'wilaya', 'dateNaissance'];
         
-        // Check User model
-        try {
-            const User = require('../models/User');
-            debug.models.User = 'available';
-            
-            // Check database connection
-            try {
-                const userCount = await User.countDocuments();
-                debug.database.connection = 'connected';
-                debug.database.userCount = userCount;
-                
-                // Check admin user
-                const admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
-                debug.database.adminExists = !!admin;
-                
-            } catch (dbError) {
-                debug.database.connection = 'error';
-                debug.database.error = dbError.message;
+        allowedUpdates.forEach(field => {
+            if (req.body[field] !== undefined) {
+                user[field] = req.body[field];
             }
-            
-        } catch (modelError) {
-            debug.models.User = 'missing';
-            debug.models.error = modelError.message;
+        });
+        
+        // Update preferences if provided
+        if (req.body.preferences) {
+            user.preferences = { ...user.preferences, ...req.body.preferences };
         }
         
-        // Environment variables
-        debug.environment.hasJWTSecret = !!process.env.JWT_SECRET;
-        debug.environment.hasMongoURI = !!process.env.MONGODB_URI;
-        debug.environment.nodeEnv = process.env.NODE_ENV;
+        await user.save();
         
-        res.json(debug);
+        res.json({
+            success: true,
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                wilaya: user.wilaya,
+                role: user.role
+            },
+            message: 'Profil mis à jour avec succès'
+        });
         
     } catch (error) {
-        res.status(500).json({
-            message: 'Error during debug',
-            error: error.message
+        console.error('Update profile error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const errors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({ message: errors.join(', ') });
+        }
+        
+        res.status(500).json({ message: 'Erreur lors de la mise à jour du profil' });
+    }
+});
+
+// Change password
+router.put('/change-password', auth, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ message: 'Mot de passe actuel et nouveau requis' });
+        }
+        
+        if (newPassword.length < 6) {
+            return res.status(400).json({ message: 'Le nouveau mot de passe doit contenir au moins 6 caractères' });
+        }
+        
+        const user = await User.findById(req.user.id);
+        
+        // Check current password
+        const isMatch = await user.comparePassword(currentPassword);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Mot de passe actuel incorrect' });
+        }
+        
+        // Update password
+        user.password = newPassword;
+        await user.save();
+        
+        res.json({
+            success: true,
+            message: 'Mot de passe modifié avec succès'
         });
+        
+    } catch (error) {
+        console.error('Change password error:', error);
+        res.status(500).json({ message: 'Erreur lors du changement de mot de passe' });
+    }
+});
+
+// Delete account
+router.delete('/account', auth, async (req, res) => {
+    try {
+        const { password } = req.body;
+        
+        if (!password) {
+            return res.status(400).json({ message: 'Mot de passe requis pour supprimer le compte' });
+        }
+        
+        const user = await User.findById(req.user.id);
+        
+        // Check password
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Mot de passe incorrect' });
+        }
+        
+        // Soft delete - deactivate account instead of deleting
+        user.actif = false;
+        user.email = `deleted_${Date.now()}_${user.email}`;
+        await user.save();
+        
+        res.json({
+            success: true,
+            message: 'Compte supprimé avec succès'
+        });
+        
+    } catch (error) {
+        console.error('Delete account error:', error);
+        res.status(500).json({ message: 'Erreur lors de la suppression du compte' });
+    }
+});
+
+// Verify token
+router.get('/verify', auth, async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            user: {
+                id: req.user._id,
+                nom: req.user.nom,
+                prenom: req.user.prenom,
+                email: req.user.email,
+                role: req.user.role
+            },
+            message: 'Token valide'
+        });
+    } catch (error) {
+        console.error('Verify token error:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
     }
 });
 

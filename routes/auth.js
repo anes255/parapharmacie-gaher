@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { auth } = require('../middleware/auth');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -24,13 +24,12 @@ router.post('/register', async (req, res) => {
         // Validation
         if (!nom || !prenom || !email || !password || !telephone || !wilaya) {
             return res.status(400).json({
-                message: 'Veuillez remplir tous les champs obligatoires',
-                required: ['nom', 'prenom', 'email', 'password', 'telephone', 'wilaya']
+                message: 'Veuillez remplir tous les champs obligatoires'
             });
         }
         
         // Check if user exists
-        const existingUser = await User.emailExists(email);
+        const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) {
             return res.status(400).json({
                 message: 'Un utilisateur avec cet email existe déjà'
@@ -38,7 +37,7 @@ router.post('/register', async (req, res) => {
         }
         
         // Check if telephone exists
-        const existingPhone = await User.phoneExists(telephone);
+        const existingPhone = await User.findOne({ telephone });
         if (existingPhone) {
             return res.status(400).json({
                 message: 'Ce numéro de téléphone est déjà utilisé'
@@ -122,14 +121,12 @@ router.post('/register', async (req, res) => {
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
             return res.status(400).json({
-                message: messages[0] || 'Données invalides',
-                errors: messages
+                message: messages[0] || 'Données invalides'
             });
         }
         
         res.status(500).json({
-            message: 'Erreur serveur lors de l\'inscription',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            message: 'Erreur serveur lors de l\'inscription'
         });
     }
 });
@@ -139,7 +136,7 @@ router.post('/register', async (req, res) => {
 // @access  Public
 router.post('/login', async (req, res) => {
     try {
-        console.log('🔐 Login attempt:', req.body.email);
+        console.log('🔐 Login attempt for:', req.body.email);
         
         const { email, password } = req.body;
         
@@ -151,23 +148,37 @@ router.post('/login', async (req, res) => {
         }
         
         // Find user and include password for comparison
-        const user = await User.findByEmailWithPassword(email);
+        const user = await User.findOne({ 
+            email: email.toLowerCase(),
+            actif: true 
+        }).select('+password');
         
         if (!user) {
+            console.log('❌ User not found:', email);
             return res.status(401).json({
                 message: 'Email ou mot de passe incorrect'
+            });
+        }
+        
+        // Check if account is blocked
+        if (user.isBlocked()) {
+            console.log('❌ Account blocked:', email);
+            return res.status(401).json({
+                message: 'Compte temporairement bloqué. Réessayez plus tard.'
             });
         }
         
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
+            console.log('❌ Password mismatch for:', email);
+            await user.handleFailedLogin();
             return res.status(401).json({
                 message: 'Email ou mot de passe incorrect'
             });
         }
         
-        console.log('✅ Login successful:', user.email, 'Role:', user.role);
+        console.log('✅ Login successful for:', user.email, 'Role:', user.role);
         
         // Generate token
         const token = generateToken(user._id);
@@ -196,8 +207,7 @@ router.post('/login', async (req, res) => {
     } catch (error) {
         console.error('❌ Login error:', error);
         res.status(500).json({
-            message: 'Erreur serveur lors de la connexion',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            message: 'Erreur serveur lors de la connexion'
         });
     }
 });
@@ -207,6 +217,8 @@ router.post('/login', async (req, res) => {
 // @access  Private
 router.get('/profile', auth, async (req, res) => {
     try {
+        console.log('👤 Getting profile for user:', req.user.id);
+        
         const user = await User.findById(req.user.id);
         
         if (!user || !user.actif) {
@@ -234,8 +246,7 @@ router.get('/profile', auth, async (req, res) => {
     } catch (error) {
         console.error('❌ Profile error:', error);
         res.status(500).json({
-            message: 'Erreur serveur',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            message: 'Erreur serveur'
         });
     }
 });
@@ -245,6 +256,8 @@ router.get('/profile', auth, async (req, res) => {
 // @access  Private
 router.put('/profile', auth, async (req, res) => {
     try {
+        console.log('📝 Updating profile for user:', req.user.id);
+        
         const { nom, prenom, telephone, adresse, ville, wilaya, codePostal, preferences } = req.body;
         
         const user = await User.findById(req.user.id);
@@ -259,7 +272,10 @@ router.put('/profile', auth, async (req, res) => {
         if (prenom) user.prenom = prenom.trim();
         if (telephone) {
             // Check if phone is already used by another user
-            const existingPhone = await User.phoneExists(telephone, req.user.id);
+            const existingPhone = await User.findOne({ 
+                telephone, 
+                _id: { $ne: req.user.id } 
+            });
             if (existingPhone) {
                 return res.status(400).json({
                     message: 'Ce numéro de téléphone est déjà utilisé'
@@ -274,6 +290,8 @@ router.put('/profile', auth, async (req, res) => {
         if (preferences) user.preferences = { ...user.preferences, ...preferences };
         
         await user.save();
+        
+        console.log('✅ Profile updated for user:', user.email);
         
         res.json({
             message: 'Profil mis à jour avec succès',
@@ -298,14 +316,12 @@ router.put('/profile', auth, async (req, res) => {
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
             return res.status(400).json({
-                message: messages[0] || 'Données invalides',
-                errors: messages
+                message: messages[0] || 'Données invalides'
             });
         }
         
         res.status(500).json({
-            message: 'Erreur lors de la mise à jour du profil',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            message: 'Erreur lors de la mise à jour du profil'
         });
     }
 });
@@ -315,6 +331,8 @@ router.put('/profile', auth, async (req, res) => {
 // @access  Private
 router.post('/change-password', auth, async (req, res) => {
     try {
+        console.log('🔑 Password change request for user:', req.user.id);
+        
         const { currentPassword, newPassword } = req.body;
         
         if (!currentPassword || !newPassword) {
@@ -349,6 +367,8 @@ router.post('/change-password', auth, async (req, res) => {
         user.password = newPassword; // Will be hashed by pre-save hook
         await user.save();
         
+        console.log('✅ Password changed for user:', user.email);
+        
         res.json({
             message: 'Mot de passe modifié avec succès'
         });
@@ -356,8 +376,7 @@ router.post('/change-password', auth, async (req, res) => {
     } catch (error) {
         console.error('❌ Password change error:', error);
         res.status(500).json({
-            message: 'Erreur lors du changement de mot de passe',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            message: 'Erreur lors du changement de mot de passe'
         });
     }
 });
@@ -407,12 +426,20 @@ router.post('/verify-token', async (req, res) => {
 });
 
 // @route   GET /api/auth/test
-// @desc    Test auth endpoint
+// @desc    Test auth route
 // @access  Public
 router.get('/test', (req, res) => {
     res.json({
-        message: 'Auth routes working correctly',
-        timestamp: new Date().toISOString()
+        message: 'Auth routes are working!',
+        timestamp: new Date().toISOString(),
+        endpoints: [
+            'POST /api/auth/login',
+            'POST /api/auth/register', 
+            'GET /api/auth/profile',
+            'PUT /api/auth/profile',
+            'POST /api/auth/change-password',
+            'POST /api/auth/verify-token'
+        ]
     });
 });
 

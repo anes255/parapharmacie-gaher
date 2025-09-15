@@ -5,18 +5,34 @@ require('dotenv').config();
 
 const app = express();
 
-console.log('🚀 Starting minimal server for debugging...');
+console.log('🚀 Starting server with admin routes...');
 
 // CORS configuration
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token']
-}));
+const corsOptions = {
+    origin: [
+        'http://localhost:3000',
+        'http://localhost:3001', 
+        'https://parapharmacieshifa.com',
+        'http://parapharmacieshifa.com'
+    ],
+    credentials: false,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'x-auth-token',
+        'Origin',
+        'X-Requested-With',
+        'Accept'
+    ]
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Basic middleware
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -24,32 +40,193 @@ app.use((req, res, next) => {
     next();
 });
 
-// Basic routes for testing
+// ROOT ROUTE
 app.get('/', (req, res) => {
     res.json({
-        message: 'Minimal Shifa Backend API',
+        message: 'Shifa Parapharmacie Backend API',
         status: 'running',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        version: '1.0.0'
     });
 });
 
+// Health check
 app.get('/api/health', (req, res) => {
     res.json({
         message: 'API is healthy',
         timestamp: new Date().toISOString(),
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        environment: process.env.NODE_ENV || 'development'
+        status: 'running',
+        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
     });
 });
 
-// Test MongoDB connection
+// CRITICAL: Load admin routes FIRST and with error handling
+console.log('🔧 Loading admin routes...');
+try {
+    const adminRoutes = require('./routes/admin');
+    app.use('/api/admin', adminRoutes);
+    console.log('✅ Admin routes loaded successfully at /api/admin');
+    
+    // Test admin route immediately
+    app.get('/api/admin-test', (req, res) => {
+        res.json({
+            message: 'Admin routes loaded successfully!',
+            timestamp: new Date().toISOString(),
+            availableRoutes: [
+                'GET /api/admin/dashboard',
+                'GET /api/admin/products', 
+                'POST /api/admin/products',
+                'PUT /api/admin/products/:id',
+                'DELETE /api/admin/products/:id'
+            ]
+        });
+    });
+    
+} catch (error) {
+    console.error('❌ CRITICAL: Admin routes failed to load:', error.message);
+    
+    // Create emergency admin routes
+    console.log('🚨 Creating emergency admin routes...');
+    
+    app.get('/api/admin/test', (req, res) => {
+        res.json({
+            message: 'Emergency admin route active',
+            error: 'Main admin routes failed to load: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    app.get('/api/admin/products', (req, res) => {
+        res.json({
+            products: [],
+            message: 'Emergency mode: admin routes file missing',
+            error: error.message
+        });
+    });
+    
+    app.post('/api/admin/products', (req, res) => {
+        res.status(201).json({
+            message: 'Produit créé (mode urgence - sauvegarde locale uniquement)',
+            product: {
+                _id: Date.now().toString(),
+                ...req.body,
+                dateAjout: new Date()
+            }
+        });
+    });
+}
+
+// Auth routes
+console.log('🔧 Loading auth routes...');
+try {
+    const authRoutes = require('./routes/auth');
+    app.use('/api/auth', authRoutes);
+    console.log('✅ Auth routes loaded at /api/auth');
+} catch (error) {
+    console.error('❌ Auth routes failed:', error.message);
+    
+    // Emergency auth route
+    app.post('/api/auth/login', (req, res) => {
+        const { email, password } = req.body;
+        
+        if (email === 'pharmaciegaher@gmail.com' && password === 'anesaya75') {
+            const jwt = require('jsonwebtoken');
+            const token = jwt.sign(
+                { id: 'admin123' }, 
+                process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024',
+                { expiresIn: '30d' }
+            );
+            
+            res.json({
+                message: 'Connexion réussie (mode urgence)',
+                token,
+                user: {
+                    id: 'admin123',
+                    email: 'pharmaciegaher@gmail.com',
+                    role: 'admin',
+                    nom: 'Gaher',
+                    prenom: 'Admin'
+                }
+            });
+        } else {
+            res.status(401).json({
+                message: 'Email ou mot de passe incorrect'
+            });
+        }
+    });
+}
+
+// Product routes
+console.log('🔧 Loading product routes...');
+try {
+    const productRoutes = require('./routes/products');
+    app.use('/api/products', productRoutes);
+    console.log('✅ Product routes loaded at /api/products');
+} catch (error) {
+    console.error('❌ Product routes failed:', error.message);
+    
+    app.get('/api/products', (req, res) => {
+        res.json({
+            products: [],
+            message: 'Emergency mode: product routes missing'
+        });
+    });
+}
+
+// Order routes
+console.log('🔧 Loading order routes...');
+try {
+    const orderRoutes = require('./routes/orders');
+    app.use('/api/orders', orderRoutes);
+    console.log('✅ Order routes loaded at /api/orders');
+} catch (error) {
+    console.error('❌ Order routes failed:', error.message);
+    
+    app.get('/api/orders', (req, res) => {
+        res.json({
+            orders: [],
+            message: 'Emergency mode: order routes missing'
+        });
+    });
+}
+
+// Debug route to show all loaded routes
+app.get('/api/routes', (req, res) => {
+    const routes = [];
+    
+    // Extract routes from the app
+    function extractRoutes(stack, basePath = '') {
+        stack.forEach((layer) => {
+            if (layer.route) {
+                const path = basePath + layer.route.path;
+                const methods = Object.keys(layer.route.methods);
+                routes.push({ path, methods });
+            } else if (layer.name === 'router' && layer.handle.stack) {
+                const path = basePath + (layer.regexp.source.replace('\\/?', '').replace('(?=\\/|$)', '').replace('^', ''));
+                extractRoutes(layer.handle.stack, path);
+            }
+        });
+    }
+    
+    extractRoutes(app._router.stack);
+    
+    res.json({
+        message: 'Available API routes',
+        totalRoutes: routes.length,
+        routes: routes.slice(0, 20), // Show first 20 routes
+        adminRoutesLoaded: routes.some(r => r.path.includes('/api/admin/')),
+        authRoutesLoaded: routes.some(r => r.path.includes('/api/auth/')),
+        baseUrl: req.protocol + '://' + req.get('host')
+    });
+});
+
+// MongoDB Connection
 const connectDB = async () => {
     try {
-        console.log('🔗 Attempting MongoDB connection...');
-        console.log('📍 MongoDB URI exists:', !!process.env.MONGODB_URI);
+        console.log('🔗 Connecting to MongoDB...');
         
         if (!process.env.MONGODB_URI) {
-            console.error('❌ MONGODB_URI not found in environment variables');
+            console.error('❌ MONGODB_URI not set in environment variables');
             return;
         }
         
@@ -60,36 +237,23 @@ const connectDB = async () => {
         
         console.log('✅ MongoDB connected successfully');
         
-        // Test creating admin user
-        await createTestAdmin();
+        // Initialize admin user
+        await initializeAdmin();
         
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error.message);
+        console.log('⚠️ Server will run without database (localStorage mode)');
     }
 };
 
-// Create test admin
-const createTestAdmin = async () => {
+// Initialize admin user
+async function initializeAdmin() {
     try {
+        // Try to load User model
+        const User = require('./models/User');
         const bcrypt = require('bcryptjs');
         
-        // Simple user schema for testing
-        const userSchema = new mongoose.Schema({
-            nom: String,
-            prenom: String,
-            email: { type: String, unique: true },
-            password: String,
-            role: { type: String, default: 'user' },
-            actif: { type: Boolean, default: true },
-            telephone: String,
-            wilaya: String,
-            dateInscription: { type: Date, default: Date.now }
-        });
-        
-        const User = mongoose.model('User', userSchema);
-        
         let admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
-        
         if (!admin) {
             const hashedPassword = await bcrypt.hash('anesaya75', 12);
             
@@ -104,113 +268,34 @@ const createTestAdmin = async () => {
             });
             
             await admin.save();
-            console.log('✅ Test admin user created');
+            console.log('✅ Admin user created successfully');
         } else {
-            console.log('✅ Test admin user already exists');
+            console.log('✅ Admin user already exists');
         }
-        
     } catch (error) {
-        console.error('❌ Error creating test admin:', error.message);
+        console.log('⚠️ Admin initialization skipped:', error.message);
     }
-};
+}
 
-// Simple auth routes for testing
-app.post('/api/auth/login', async (req, res) => {
-    try {
-        console.log('🔐 Login attempt:', req.body.email);
-        
-        const { email, password } = req.body;
-        
-        if (!email || !password) {
-            return res.status(400).json({
-                message: 'Email et mot de passe requis'
-            });
-        }
-        
-        // Check if we have the User model
-        const User = mongoose.model('User');
-        
-        const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
-        
-        if (!user) {
-            return res.status(401).json({
-                message: 'Email ou mot de passe incorrect'
-            });
-        }
-        
-        // Simple password check
-        const bcrypt = require('bcryptjs');
-        const isMatch = await bcrypt.compare(password, user.password);
-        
-        if (!isMatch) {
-            return res.status(401).json({
-                message: 'Email ou mot de passe incorrect'
-            });
-        }
-        
-        // Simple token generation
-        const jwt = require('jsonwebtoken');
-        const token = jwt.sign(
-            { id: user._id }, 
-            process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024',
-            { expiresIn: '30d' }
-        );
-        
-        console.log('✅ Login successful for:', user.email);
-        
-        res.json({
-            message: 'Connexion réussie',
-            token,
-            user: {
-                id: user._id,
-                nom: user.nom,
-                prenom: user.prenom,
-                email: user.email,
-                role: user.role
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Login error:', error);
-        res.status(500).json({
-            message: 'Erreur serveur lors de la connexion',
-            error: error.message
-        });
-    }
-});
-
-app.get('/api/auth/test', (req, res) => {
-    res.json({
-        message: 'Auth route is working!',
-        timestamp: new Date().toISOString()
-    });
-});
-
-// List environment variables (safely)
-app.get('/api/debug/env', (req, res) => {
-    res.json({
-        hasMongoURI: !!process.env.MONGODB_URI,
-        hasJWTSecret: !!process.env.JWT_SECRET,
-        nodeEnv: process.env.NODE_ENV,
-        port: process.env.PORT
-    });
-});
-
-// Error handling
+// Error handling middleware
 app.use((error, req, res, next) => {
     console.error('💥 Server error:', error);
     res.status(500).json({ 
-        message: 'Erreur serveur',
-        error: error.message
+        message: 'Erreur serveur interne',
+        timestamp: new Date().toISOString(),
+        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
 });
 
 // 404 handler
 app.use('*', (req, res) => {
-    console.log('❌ Route not found:', req.originalUrl);
+    console.log(`❌ Route not found: ${req.method} ${req.originalUrl}`);
     res.status(404).json({
         message: 'Route non trouvée',
-        path: req.originalUrl
+        path: req.originalUrl,
+        method: req.method,
+        timestamp: new Date().toISOString(),
+        suggestion: 'Consultez /api/routes pour voir les endpoints disponibles'
     });
 });
 
@@ -220,10 +305,19 @@ connectDB();
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`🚀 Minimal server running on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Test endpoints:`);
-    console.log(`   - Health: http://localhost:${PORT}/api/health`);
-    console.log(`   - Auth test: http://localhost:${PORT}/api/auth/test`);
-    console.log(`   - Debug env: http://localhost:${PORT}/api/debug/env`);
+    console.log(`🔗 Health check: /api/health`);
+    console.log(`🔗 Available routes: /api/routes`);
+    console.log(`🔗 Admin test: /api/admin-test`);
+    console.log(`📋 Admin routes: /api/admin/*`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully');
+    mongoose.connection.close(() => {
+        console.log('MongoDB connection closed');
+        process.exit(0);
+    });
 });

@@ -1,48 +1,66 @@
 const express = require('express');
 const router = express.Router();
 
-console.log('🔧 Loading orders route...');
+// Immediately log that this file is being loaded
+console.log('🔥 ORDERS ROUTE FILE IS LOADING...');
 
-// Simple middleware to log all requests to this route
-router.use((req, res, next) => {
-    console.log(`📦 Orders Route: ${req.method} ${req.path}`, {
-        body: req.body ? 'Present' : 'None',
-        headers: req.headers['content-type']
+// Test route - MUST work
+router.get('/test', (req, res) => {
+    console.log('🧪 Orders test route accessed successfully!');
+    res.json({
+        success: true,
+        message: 'Orders route is working perfectly!',
+        timestamp: new Date().toISOString(),
+        routes: [
+            'GET /api/orders/test - This endpoint',
+            'POST /api/orders - Create order',
+            'GET /api/orders/user/all - Get user orders',
+            'GET /api/orders/:id - Get specific order'
+        ]
     });
-    next();
 });
 
-// Import auth middleware with fallback
+// Simple auth middleware fallback
+const simpleAuth = (req, res, next) => {
+    const token = req.header('x-auth-token');
+    if (token) {
+        // In a real app, verify the token here
+        req.user = { id: 'user123', role: 'user' };
+    } else {
+        req.user = { id: 'guest', role: 'guest' };
+    }
+    next();
+};
+
+// Load auth middleware with fallback
 let auth;
 try {
     auth = require('../middleware/auth');
-    console.log('✅ Auth middleware loaded');
+    console.log('✅ Auth middleware loaded successfully');
 } catch (error) {
-    console.log('⚠️ Auth middleware not found, using fallback');
-    auth = (req, res, next) => {
-        req.user = { id: 'guest', role: 'user' };
-        next();
-    };
+    console.log('⚠️ Using simple auth fallback');
+    auth = simpleAuth;
 }
 
-// Import Order model with fallback
+// Load Order model with fallback
 let Order;
 try {
     Order = require('../models/Order');
-    console.log('✅ Order model loaded');
+    console.log('✅ Order model loaded successfully');
 } catch (error) {
-    console.log('⚠️ Order model not found, using fallback');
+    console.log('⚠️ Order model not available, using memory storage');
     Order = null;
 }
 
-// @route   POST /api/orders
-// @desc    Create new order - SIMPLIFIED VERSION
-// @access  Public
+// In-memory storage as fallback
+let memoryOrders = [];
+
+// CREATE ORDER - Main route
 router.post('/', async (req, res) => {
+    console.log('📦 POST /api/orders - Order creation started');
+    console.log('📦 Request body received:', !!req.body);
+    
     try {
-        console.log('📦 POST /api/orders - Creating new order');
-        console.log('📦 Request body:', JSON.stringify(req.body, null, 2));
-        
         const {
             numeroCommande,
             client,
@@ -53,37 +71,49 @@ router.post('/', async (req, res) => {
             modePaiement,
             commentaires
         } = req.body;
-        
-        // Basic validation
-        if (!numeroCommande) {
-            console.log('❌ Missing numeroCommande');
+
+        // Validate required fields
+        if (!numeroCommande || !client || !articles) {
+            console.log('❌ Validation failed - missing required fields');
             return res.status(400).json({
-                message: 'Numéro de commande requis',
-                error: 'MISSING_ORDER_NUMBER'
+                success: false,
+                message: 'Données manquantes',
+                required: ['numeroCommande', 'client', 'articles'],
+                received: {
+                    numeroCommande: !!numeroCommande,
+                    client: !!client,
+                    articles: !!articles
+                }
             });
         }
-        
-        if (!client || !client.nom || !client.email) {
-            console.log('❌ Missing client information');
+
+        if (!client.nom || !client.email) {
+            console.log('❌ Client validation failed');
             return res.status(400).json({
-                message: 'Informations client requises',
-                error: 'MISSING_CLIENT_INFO',
-                required: ['nom', 'prenom', 'email', 'telephone', 'adresse', 'wilaya']
+                success: false,
+                message: 'Informations client incomplètes',
+                required: ['nom', 'email'],
+                received: {
+                    nom: !!client.nom,
+                    email: !!client.email
+                }
             });
         }
-        
-        if (!articles || !Array.isArray(articles) || articles.length === 0) {
-            console.log('❌ Missing articles');
+
+        if (!Array.isArray(articles) || articles.length === 0) {
+            console.log('❌ Articles validation failed');
             return res.status(400).json({
+                success: false,
                 message: 'Articles requis',
-                error: 'MISSING_ARTICLES'
+                received: typeof articles,
+                length: articles ? articles.length : 0
             });
         }
-        
+
         // Create order object
         const orderData = {
-            _id: Date.now().toString(),
-            numeroCommande,
+            _id: `order_${Date.now()}`,
+            numeroCommande: numeroCommande,
             client: {
                 userId: req.user ? req.user.id : null,
                 prenom: client.prenom || '',
@@ -93,9 +123,9 @@ router.post('/', async (req, res) => {
                 adresse: client.adresse || '',
                 wilaya: client.wilaya || ''
             },
-            articles: articles.map(article => ({
-                productId: article.productId || article.id,
-                nom: article.nom,
+            articles: articles.map((article, index) => ({
+                productId: article.productId || article.id || `item_${index}`,
+                nom: article.nom || 'Article sans nom',
                 prix: parseFloat(article.prix) || 0,
                 quantite: parseInt(article.quantite) || 1,
                 image: article.image || ''
@@ -108,99 +138,100 @@ router.post('/', async (req, res) => {
             commentaires: commentaires || '',
             dateCommande: new Date().toISOString()
         };
-        
+
+        console.log('📦 Order data prepared:', {
+            id: orderData._id,
+            numero: orderData.numeroCommande,
+            total: orderData.total,
+            articlesCount: orderData.articles.length
+        });
+
+        let savedToDatabase = false;
+
         // Try to save to MongoDB if available
-        let savedOrder = null;
         if (Order) {
             try {
                 const mongoOrder = new Order(orderData);
-                savedOrder = await mongoOrder.save();
-                console.log('✅ Order saved to MongoDB:', savedOrder._id);
+                await mongoOrder.save();
+                console.log('✅ Order saved to MongoDB');
+                savedToDatabase = true;
             } catch (mongoError) {
                 console.log('⚠️ MongoDB save failed:', mongoError.message);
             }
         }
-        
-        // Always return success response
-        const responseOrder = savedOrder || orderData;
-        
-        console.log('✅ Order created successfully:', responseOrder.numeroCommande);
-        
-        res.status(201).json({
+
+        // Always save to memory as backup
+        memoryOrders.unshift(orderData);
+        if (memoryOrders.length > 100) {
+            memoryOrders = memoryOrders.slice(0, 100); // Keep only last 100
+        }
+        console.log('✅ Order saved to memory');
+
+        // Success response
+        const response = {
             success: true,
             message: 'Commande créée avec succès',
             order: {
-                _id: responseOrder._id,
-                numeroCommande: responseOrder.numeroCommande,
-                statut: responseOrder.statut,
-                total: responseOrder.total,
-                dateCommande: responseOrder.dateCommande,
-                client: {
-                    nom: responseOrder.client.nom,
-                    prenom: responseOrder.client.prenom,
-                    email: responseOrder.client.email
-                }
+                _id: orderData._id,
+                numeroCommande: orderData.numeroCommande,
+                statut: orderData.statut,
+                total: orderData.total,
+                dateCommande: orderData.dateCommande
             },
+            savedToDatabase,
             timestamp: new Date().toISOString()
-        });
-        
+        };
+
+        console.log('✅ Order created successfully:', orderData.numeroCommande);
+        res.status(201).json(response);
+
     } catch (error) {
         console.error('❌ Order creation error:', error);
         
-        // Always return a response, never let it hang
+        // Always respond, never hang
         res.status(500).json({
             success: false,
             message: 'Erreur lors de la création de la commande',
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+            error: error.message,
             timestamp: new Date().toISOString()
         });
     }
 });
 
-// @route   GET /api/orders/test
-// @desc    Test endpoint to verify orders route is working
-// @access  Public
-router.get('/test', (req, res) => {
-    console.log('🧪 Orders test endpoint accessed');
-    res.json({
-        message: 'Orders route is working!',
-        timestamp: new Date().toISOString(),
-        routes: [
-            'POST /api/orders - Create order',
-            'GET /api/orders/test - Test endpoint',
-            'GET /api/orders/user/all - Get user orders (requires auth)',
-            'GET /api/orders/:id - Get specific order (requires auth)'
-        ]
-    });
-});
-
-// @route   GET /api/orders/user/all
-// @desc    Get user orders
-// @access  Private
+// GET USER ORDERS
 router.get('/user/all', auth, async (req, res) => {
+    console.log('📦 GET user orders for:', req.user?.id);
+    
     try {
-        console.log('📦 Getting orders for user:', req.user.id);
-        
         let orders = [];
-        
-        if (Order) {
+
+        // Try database first
+        if (Order && req.user?.id && req.user.id !== 'guest') {
             try {
                 orders = await Order.find({ 
                     'client.userId': req.user.id 
                 }).sort({ dateCommande: -1 });
-                console.log(`✅ Found ${orders.length} orders from database`);
+                console.log(`✅ Found ${orders.length} orders in database`);
             } catch (error) {
                 console.log('⚠️ Database query failed:', error.message);
             }
         }
-        
+
+        // Fallback to memory
+        if (orders.length === 0) {
+            orders = memoryOrders.filter(order => 
+                order.client.userId === req.user?.id
+            );
+            console.log(`✅ Found ${orders.length} orders in memory`);
+        }
+
         res.json({
             success: true,
             orders,
             count: orders.length,
             timestamp: new Date().toISOString()
         });
-        
+
     } catch (error) {
         console.error('❌ Get user orders error:', error);
         res.status(500).json({
@@ -212,13 +243,14 @@ router.get('/user/all', auth, async (req, res) => {
     }
 });
 
-// @route   GET /api/orders/:id
-// @desc    Get order by ID
-// @access  Private
+// GET SPECIFIC ORDER
 router.get('/:id', auth, async (req, res) => {
+    console.log('📦 GET order:', req.params.id);
+    
     try {
         let order = null;
-        
+
+        // Try database first
         if (Order) {
             try {
                 order = await Order.findById(req.params.id);
@@ -226,7 +258,12 @@ router.get('/:id', auth, async (req, res) => {
                 console.log('⚠️ Database query failed:', error.message);
             }
         }
-        
+
+        // Fallback to memory
+        if (!order) {
+            order = memoryOrders.find(o => o._id === req.params.id);
+        }
+
         if (!order) {
             return res.status(404).json({
                 success: false,
@@ -234,22 +271,22 @@ router.get('/:id', auth, async (req, res) => {
                 timestamp: new Date().toISOString()
             });
         }
-        
+
         // Check permissions
-        if (order.client.userId !== req.user.id && req.user.role !== 'admin') {
+        if (order.client.userId !== req.user?.id && req.user?.role !== 'admin') {
             return res.status(403).json({
                 success: false,
-                message: 'Accès non autorisé à cette commande',
+                message: 'Accès non autorisé',
                 timestamp: new Date().toISOString()
             });
         }
-        
+
         res.json({
             success: true,
             order,
             timestamp: new Date().toISOString()
         });
-        
+
     } catch (error) {
         console.error('❌ Get order error:', error);
         res.status(500).json({
@@ -260,45 +297,44 @@ router.get('/:id', auth, async (req, res) => {
     }
 });
 
-// @route   GET /api/orders
-// @desc    Get all orders (Admin only)
-// @access  Private/Admin
+// ADMIN - GET ALL ORDERS
 router.get('/', auth, async (req, res) => {
+    console.log('📦 Admin getting all orders');
+    
     try {
-        if (req.user.role !== 'admin') {
+        if (req.user?.role !== 'admin') {
             return res.status(403).json({
                 success: false,
                 message: 'Accès administrateur requis',
                 timestamp: new Date().toISOString()
             });
         }
-        
+
         let orders = [];
-        
+
+        // Try database first
         if (Order) {
             try {
-                const page = parseInt(req.query.page) || 1;
-                const limit = parseInt(req.query.limit) || 20;
-                const skip = (page - 1) * limit;
-                
-                orders = await Order.find()
-                    .sort({ dateCommande: -1 })
-                    .skip(skip)
-                    .limit(limit);
-                    
-                console.log(`✅ Admin retrieved ${orders.length} orders`);
+                orders = await Order.find().sort({ dateCommande: -1 }).limit(50);
+                console.log(`✅ Found ${orders.length} orders in database`);
             } catch (error) {
-                console.log('⚠️ Admin query failed:', error.message);
+                console.log('⚠️ Database query failed:', error.message);
             }
         }
-        
+
+        // Fallback to memory
+        if (orders.length === 0) {
+            orders = memoryOrders.slice(0, 50);
+            console.log(`✅ Using ${orders.length} orders from memory`);
+        }
+
         res.json({
             success: true,
             orders,
             count: orders.length,
             timestamp: new Date().toISOString()
         });
-        
+
     } catch (error) {
         console.error('❌ Admin get orders error:', error);
         res.status(500).json({
@@ -310,6 +346,17 @@ router.get('/', auth, async (req, res) => {
     }
 });
 
-console.log('✅ Orders route loaded successfully');
+// HEALTH CHECK
+router.get('/health', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Orders route is healthy',
+        timestamp: new Date().toISOString(),
+        orderModelAvailable: !!Order,
+        memoryOrdersCount: memoryOrders.length
+    });
+});
+
+console.log('✅ ORDERS ROUTE LOADED COMPLETELY');
 
 module.exports = router;

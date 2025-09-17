@@ -15,50 +15,84 @@ router.use(requireAdmin);
 // @access  Private/Admin
 router.get('/dashboard', async (req, res) => {
     try {
-        console.log('📊 Admin dashboard request');
+        console.log('📊 Admin dashboard request from user:', req.user.email);
         
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+        const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
         const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         
-        // Get various statistics
-        const [
-            totalProducts,
-            activeProducts,
-            featuredProducts,
-            totalOrders,
-            pendingOrders,
-            monthlyOrders,
-            dailyOrders,
-            totalUsers,
-            activeUsers,
-            monthlyRevenue,
-            ordersByStatus,
-            topProducts,
-            recentOrders
-        ] = await Promise.all([
+        // Initialize default values
+        let totalProducts = 0;
+        let activeProducts = 0;
+        let featuredProducts = 0;
+        let totalOrders = 0;
+        let pendingOrders = 0;
+        let monthlyOrders = 0;
+        let dailyOrders = 0;
+        let totalUsers = 0;
+        let activeUsers = 0;
+        let monthlyRevenue = 0;
+        let ordersByStatus = {};
+        let topProducts = [];
+        let recentOrders = [];
+        
+        try {
             // Product statistics
-            Product.countDocuments(),
-            Product.countDocuments({ actif: true }),
-            Product.countDocuments({ enVedette: true }),
-            
+            totalProducts = await Product.countDocuments();
+            activeProducts = await Product.countDocuments({ actif: true });
+            featuredProducts = await Product.countDocuments({ enVedette: true });
+        } catch (error) {
+            console.log('Product stats error:', error.message);
+        }
+        
+        try {
             // Order statistics
-            Order.countDocuments(),
-            Order.countDocuments({ statut: 'en-attente' }),
-            Order.countDocuments({ 
+            totalOrders = await Order.countDocuments();
+            pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
+            monthlyOrders = await Order.countDocuments({ 
                 dateCommande: { $gte: startOfMonth } 
-            }),
-            Order.countDocuments({ 
+            });
+            dailyOrders = await Order.countDocuments({ 
                 dateCommande: { $gte: startOfDay } 
-            }),
+            });
             
+            // Orders by status
+            const statusAggregation = await Order.aggregate([
+                {
+                    $group: {
+                        _id: '$statut',
+                        count: { $sum: 1 }
+                    }
+                }
+            ]);
+            
+            ordersByStatus = statusAggregation.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {});
+            
+            // Recent orders
+            recentOrders = await Order.find()
+                .sort({ dateCommande: -1 })
+                .limit(5)
+                .select('numeroCommande client total statut dateCommande');
+                
+        } catch (error) {
+            console.log('Order stats error:', error.message);
+        }
+        
+        try {
             // User statistics
-            User.countDocuments(),
-            User.countDocuments({ actif: true }),
-            
+            totalUsers = await User.countDocuments();
+            activeUsers = await User.countDocuments({ actif: true });
+        } catch (error) {
+            console.log('User stats error:', error.message);
+        }
+        
+        try {
             // Revenue calculation
-            Order.aggregate([
+            const revenueAggregation = await Order.aggregate([
                 {
                     $match: {
                         dateCommande: { $gte: startOfMonth },
@@ -71,20 +105,16 @@ router.get('/dashboard', async (req, res) => {
                         total: { $sum: '$total' }
                     }
                 }
-            ]),
+            ]);
             
-            // Orders by status
-            Order.aggregate([
-                {
-                    $group: {
-                        _id: '$statut',
-                        count: { $sum: 1 }
-                    }
-                }
-            ]),
-            
-            // Top selling products (based on order frequency)
-            Order.aggregate([
+            monthlyRevenue = revenueAggregation[0]?.total || 0;
+        } catch (error) {
+            console.log('Revenue stats error:', error.message);
+        }
+        
+        try {
+            // Top selling products
+            topProducts = await Order.aggregate([
                 { $unwind: '$articles' },
                 {
                     $group: {
@@ -96,51 +126,107 @@ router.get('/dashboard', async (req, res) => {
                 },
                 { $sort: { totalSold: -1 } },
                 { $limit: 5 }
-            ]),
-            
-            // Recent orders
-            Order.find()
-                .sort({ dateCommande: -1 })
-                .limit(5)
-                .select('numeroCommande client total statut dateCommande')
-        ]);
+            ]);
+        } catch (error) {
+            console.log('Top products stats error:', error.message);
+            topProducts = [];
+        }
         
         const dashboardData = {
             products: {
                 total: totalProducts,
                 active: activeProducts,
                 featured: featuredProducts,
-                inactive: totalProducts - activeProducts
+                inactive: Math.max(0, totalProducts - activeProducts)
             },
             orders: {
                 total: totalOrders,
                 pending: pendingOrders,
                 monthly: monthlyOrders,
                 daily: dailyOrders,
-                byStatus: ordersByStatus.reduce((acc, item) => {
-                    acc[item._id] = item.count;
-                    return acc;
-                }, {})
+                byStatus: ordersByStatus
             },
             users: {
                 total: totalUsers,
                 active: activeUsers,
-                inactive: totalUsers - activeUsers
+                inactive: Math.max(0, totalUsers - activeUsers)
             },
             revenue: {
-                monthly: monthlyRevenue[0]?.total || 0,
-                average: monthlyOrders > 0 ? Math.round((monthlyRevenue[0]?.total || 0) / monthlyOrders) : 0
+                monthly: monthlyRevenue,
+                average: monthlyOrders > 0 ? Math.round(monthlyRevenue / monthlyOrders) : 0
             },
             topProducts: topProducts,
-            recentOrders: recentOrders
+            recentOrders: recentOrders,
+            timestamp: new Date().toISOString()
         };
         
+        console.log('✅ Dashboard data prepared successfully');
         res.json(dashboardData);
         
     } catch (error) {
         console.error('❌ Admin dashboard error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la récupération des statistiques'
+            message: 'Erreur lors de la récupération des statistiques',
+            error: error.message
+        });
+    }
+});
+
+// @route   GET /api/admin/orders
+// @desc    Get all orders for admin management
+// @access  Private/Admin
+router.get('/orders', async (req, res) => {
+    try {
+        console.log('📦 Admin getting all orders');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        // Filter by status
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Filter by date range
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                query.dateCommande.$lte = new Date(req.query.dateTo);
+            }
+        }
+        
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        console.log(`✅ Retrieved ${orders.length} orders out of ${total} total`);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get admin orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes',
+            error: error.message
         });
     }
 });
@@ -224,7 +310,8 @@ router.get('/products', async (req, res) => {
     } catch (error) {
         console.error('❌ Admin products error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la récupération des produits'
+            message: 'Erreur lors de la récupération des produits',
+            error: error.message
         });
     }
 });
@@ -262,7 +349,8 @@ router.post('/products', async (req, res) => {
         }
         
         res.status(500).json({
-            message: 'Erreur serveur lors de la création du produit'
+            message: 'Erreur serveur lors de la création du produit',
+            error: error.message
         });
     }
 });
@@ -309,7 +397,8 @@ router.put('/products/:id', async (req, res) => {
         }
         
         res.status(500).json({
-            message: 'Erreur lors de la mise à jour du produit'
+            message: 'Erreur lors de la mise à jour du produit',
+            error: error.message
         });
     }
 });
@@ -340,7 +429,63 @@ router.delete('/products/:id', async (req, res) => {
     } catch (error) {
         console.error('❌ Product deletion error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la suppression du produit'
+            message: 'Erreur lors de la suppression du produit',
+            error: error.message
+        });
+    }
+});
+
+// @route   PUT /api/admin/orders/:id
+// @desc    Update order status
+// @access  Private/Admin
+router.put('/orders/:id', async (req, res) => {
+    try {
+        const { statut } = req.body;
+        
+        console.log(`📦 Admin updating order ${req.params.id} to status: ${statut}`);
+        
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        // Validate status
+        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
+        if (!validStatuses.includes(statut)) {
+            return res.status(400).json({
+                message: 'Statut de commande invalide'
+            });
+        }
+        
+        order.statut = statut;
+        
+        // Set delivery date if status is delivered
+        if (statut === 'livrée') {
+            order.dateLivraison = new Date();
+        }
+        
+        await order.save();
+        
+        console.log(`✅ Order ${order.numeroCommande} status updated to: ${statut}`);
+        
+        res.json({
+            message: 'Statut de commande mis à jour',
+            order: {
+                _id: order._id,
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                dateLivraison: order.dateLivraison
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Update order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de la commande',
+            error: error.message
         });
     }
 });
@@ -401,7 +546,8 @@ router.get('/users', async (req, res) => {
     } catch (error) {
         console.error('❌ Admin users error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la récupération des utilisateurs'
+            message: 'Erreur lors de la récupération des utilisateurs',
+            error: error.message
         });
     }
 });
@@ -449,7 +595,8 @@ router.put('/users/:id', async (req, res) => {
     } catch (error) {
         console.error('❌ User update error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la mise à jour de l\'utilisateur'
+            message: 'Erreur lors de la mise à jour de l\'utilisateur',
+            error: error.message
         });
     }
 });
@@ -487,7 +634,8 @@ router.delete('/users/:id', async (req, res) => {
     } catch (error) {
         console.error('❌ User deletion error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la suppression de l\'utilisateur'
+            message: 'Erreur lors de la suppression de l\'utilisateur',
+            error: error.message
         });
     }
 });
@@ -524,28 +672,6 @@ router.get('/analytics', async (req, res) => {
             }
         ]);
         
-        // Category analytics
-        const categoryAnalytics = await Order.aggregate([
-            { $unwind: '$articles' },
-            {
-                $lookup: {
-                    from: 'products',
-                    localField: 'articles.productId',
-                    foreignField: '_id',
-                    as: 'productInfo'
-                }
-            },
-            { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } },
-            {
-                $group: {
-                    _id: '$productInfo.categorie',
-                    totalSold: { $sum: '$articles.quantite' },
-                    revenue: { $sum: { $multiply: ['$articles.prix', '$articles.quantite'] } }
-                }
-            },
-            { $sort: { revenue: -1 } }
-        ]);
-        
         // User registration analytics
         const userRegistrations = await User.aggregate([
             {
@@ -569,9 +695,8 @@ router.get('/analytics', async (req, res) => {
         ]);
         
         res.json({
-            dailyOrders,
-            categoryAnalytics,
-            userRegistrations,
+            dailyOrders: dailyOrders || [],
+            userRegistrations: userRegistrations || [],
             period: {
                 days,
                 startDate,
@@ -582,7 +707,8 @@ router.get('/analytics', async (req, res) => {
     } catch (error) {
         console.error('❌ Admin analytics error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la récupération des analyses'
+            message: 'Erreur lors de la récupération des analyses',
+            error: error.message
         });
     }
 });

@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const auth = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -17,7 +17,7 @@ const generateToken = (id) => {
 // @access  Public
 router.post('/register', async (req, res) => {
     try {
-        console.log('📝 Registration attempt for:', req.body.email);
+        console.log('📝 Registration attempt:', req.body.email);
         
         const { nom, prenom, email, password, telephone, adresse, ville, wilaya, codePostal } = req.body;
         
@@ -28,12 +28,8 @@ router.post('/register', async (req, res) => {
             });
         }
         
-        // Clean and validate inputs
-        const cleanEmail = email.toLowerCase().trim();
-        const cleanTelephone = telephone.replace(/\s+/g, '');
-        
         // Check if user exists
-        const existingUser = await User.findOne({ email: cleanEmail });
+        const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) {
             return res.status(400).json({
                 message: 'Un utilisateur avec cet email existe déjà'
@@ -41,7 +37,7 @@ router.post('/register', async (req, res) => {
         }
         
         // Check if telephone exists
-        const existingPhone = await User.findOne({ telephone: cleanTelephone });
+        const existingPhone = await User.findOne({ telephone });
         if (existingPhone) {
             return res.status(400).json({
                 message: 'Ce numéro de téléphone est déjà utilisé'
@@ -50,7 +46,7 @@ router.post('/register', async (req, res) => {
         
         // Validate email format
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(cleanEmail)) {
+        if (!emailRegex.test(email)) {
             return res.status(400).json({
                 message: 'Format d\'email invalide'
             });
@@ -65,31 +61,27 @@ router.post('/register', async (req, res) => {
         
         // Validate phone format (Algerian)
         const phoneRegex = /^(\+213|0)[5-9]\d{8}$/;
-        if (!phoneRegex.test(cleanTelephone)) {
+        if (!phoneRegex.test(telephone.replace(/\s+/g, ''))) {
             return res.status(400).json({
                 message: 'Format de téléphone invalide (numéro algérien requis)'
             });
         }
         
         // Create user
-        const userData = {
+        const user = new User({
             nom: nom.trim(),
             prenom: prenom.trim(),
-            email: cleanEmail,
+            email: email.toLowerCase().trim(),
             password, // Will be hashed by pre-save hook
-            telephone: cleanTelephone,
+            telephone: telephone.replace(/\s+/g, ''),
             adresse: adresse ? adresse.trim() : '',
             ville: ville ? ville.trim() : '',
             wilaya,
             codePostal: codePostal ? codePostal.trim() : '',
             dateInscription: new Date()
-        };
+        });
         
-        console.log('Creating user with data:', { ...userData, password: '[HIDDEN]' });
-        
-        const user = new User(userData);
         await user.save();
-        
         console.log('✅ User registered successfully:', user.email);
         
         // Generate token
@@ -98,14 +90,21 @@ router.post('/register', async (req, res) => {
         // Update last connection
         await user.updateLastConnection();
         
-        // Get user without password
-        const userResponse = user.getPublicProfile();
-        
         res.status(201).json({
             message: 'Inscription réussie',
-            success: true,
             token,
-            user: userResponse
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                role: user.role,
+                dateInscription: user.dateInscription
+            }
         });
         
     } catch (error) {
@@ -137,7 +136,7 @@ router.post('/register', async (req, res) => {
 // @access  Public
 router.post('/login', async (req, res) => {
     try {
-        console.log('🔐 Login attempt for:', req.body.email);
+        console.log('🔐 Login attempt:', req.body.email);
         
         const { email, password } = req.body;
         
@@ -148,30 +147,27 @@ router.post('/login', async (req, res) => {
             });
         }
         
-        const cleanEmail = email.toLowerCase().trim();
-        
         // Find user and include password for comparison
-        const user = await User.findByEmailWithPassword(cleanEmail);
+        const user = await User.findOne({ 
+            email: email.toLowerCase(),
+            actif: true 
+        }).select('+password');
         
         if (!user) {
-            console.log('❌ User not found:', cleanEmail);
             return res.status(401).json({
                 message: 'Email ou mot de passe incorrect'
             });
         }
-        
-        console.log('👤 User found:', user.email, 'Role:', user.role);
         
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
-            console.log('❌ Password mismatch for:', user.email);
             return res.status(401).json({
                 message: 'Email ou mot de passe incorrect'
             });
         }
         
-        console.log('✅ Login successful for:', user.email, 'Role:', user.role);
+        console.log('✅ Login successful:', user.email, 'Role:', user.role);
         
         // Generate token
         const token = generateToken(user._id);
@@ -179,14 +175,22 @@ router.post('/login', async (req, res) => {
         // Update last connection
         await user.updateLastConnection();
         
-        // Get user without password
-        const userResponse = user.getPublicProfile();
-        
         res.json({
             message: 'Connexion réussie',
-            success: true,
             token,
-            user: userResponse
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                role: user.role,
+                dateInscription: user.dateInscription,
+                dernierConnexion: user.dernierConnexion
+            }
         });
         
     } catch (error) {
@@ -210,7 +214,21 @@ router.get('/profile', auth, async (req, res) => {
             });
         }
         
-        res.json(user.getPublicProfile());
+        res.json({
+            id: user._id,
+            nom: user.nom,
+            prenom: user.prenom,
+            email: user.email,
+            telephone: user.telephone,
+            adresse: user.adresse,
+            ville: user.ville,
+            wilaya: user.wilaya,
+            codePostal: user.codePostal,
+            role: user.role,
+            dateInscription: user.dateInscription,
+            dernierConnexion: user.dernierConnexion,
+            preferences: user.preferences
+        });
         
     } catch (error) {
         console.error('❌ Profile error:', error);
@@ -238,11 +256,9 @@ router.put('/profile', auth, async (req, res) => {
         if (nom) user.nom = nom.trim();
         if (prenom) user.prenom = prenom.trim();
         if (telephone) {
-            const cleanTelephone = telephone.replace(/\s+/g, '');
-            
             // Check if phone is already used by another user
             const existingPhone = await User.findOne({ 
-                telephone: cleanTelephone, 
+                telephone, 
                 _id: { $ne: req.user.id } 
             });
             if (existingPhone) {
@@ -250,7 +266,7 @@ router.put('/profile', auth, async (req, res) => {
                     message: 'Ce numéro de téléphone est déjà utilisé'
                 });
             }
-            user.telephone = cleanTelephone;
+            user.telephone = telephone.replace(/\s+/g, '');
         }
         if (adresse) user.adresse = adresse.trim();
         if (ville) user.ville = ville.trim();
@@ -262,8 +278,19 @@ router.put('/profile', auth, async (req, res) => {
         
         res.json({
             message: 'Profil mis à jour avec succès',
-            success: true,
-            user: user.getPublicProfile()
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                codePostal: user.codePostal,
+                role: user.role,
+                preferences: user.preferences
+            }
         });
         
     } catch (error) {
@@ -321,11 +348,8 @@ router.post('/change-password', auth, async (req, res) => {
         user.password = newPassword; // Will be hashed by pre-save hook
         await user.save();
         
-        console.log('✅ Password changed for user:', user.email);
-        
         res.json({
-            message: 'Mot de passe modifié avec succès',
-            success: true
+            message: 'Mot de passe modifié avec succès'
         });
         
     } catch (error) {
@@ -367,9 +391,7 @@ router.post('/verify-token', async (req, res) => {
             user: {
                 id: user._id,
                 email: user.email,
-                role: user.role,
-                nom: user.nom,
-                prenom: user.prenom
+                role: user.role
             }
         });
         
@@ -378,44 +400,6 @@ router.post('/verify-token', async (req, res) => {
         res.status(401).json({
             valid: false,
             message: 'Token invalide ou expiré'
-        });
-    }
-});
-
-// @route   POST /api/auth/forgot-password
-// @desc    Request password reset
-// @access  Public
-router.post('/forgot-password', async (req, res) => {
-    try {
-        const { email } = req.body;
-        
-        if (!email) {
-            return res.status(400).json({
-                message: 'Email requis'
-            });
-        }
-        
-        const user = await User.findOne({ email: email.toLowerCase().trim() });
-        
-        if (!user) {
-            // Don't reveal if email exists
-            return res.json({
-                message: 'Si cet email existe, vous recevrez un lien de réinitialisation'
-            });
-        }
-        
-        // In a real app, you would send an email here
-        // For now, just return success
-        console.log('Password reset requested for:', user.email);
-        
-        res.json({
-            message: 'Si cet email existe, vous recevrez un lien de réinitialisation'
-        });
-        
-    } catch (error) {
-        console.error('❌ Forgot password error:', error);
-        res.status(500).json({
-            message: 'Erreur serveur'
         });
     }
 });

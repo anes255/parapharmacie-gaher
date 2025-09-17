@@ -1,21 +1,11 @@
 const express = require('express');
 const Product = require('../models/Product');
-const auth = require('../middleware/auth');
+const { auth, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Check if user is admin
-const requireAdmin = (req, res, next) => {
-    if (!req.user || req.user.role !== 'admin') {
-        return res.status(403).json({
-            message: 'Accès administrateur requis'
-        });
-    }
-    next();
-};
-
 // @route   GET /api/products
-// @desc    Get all active products with filters and pagination
+// @desc    Get all products with filters and pagination
 // @access  Public
 router.get('/', async (req, res) => {
     try {
@@ -25,7 +15,7 @@ router.get('/', async (req, res) => {
         
         let query = { actif: true };
         
-        // Filtres
+        // Filters
         if (req.query.categorie) {
             query.categorie = req.query.categorie;
         }
@@ -52,7 +42,7 @@ router.get('/', async (req, res) => {
             query.enVedette = true;
         }
         
-        // Tri
+        // Sort
         let sort = {};
         switch (req.query.sort) {
             case 'price_asc':
@@ -94,8 +84,10 @@ router.get('/', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Erreur récupération produits:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
+        console.error('❌ Get products error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la récupération des produits' 
+        });
     }
 });
 
@@ -107,14 +99,18 @@ router.get('/:id', async (req, res) => {
         const product = await Product.findById(req.params.id);
         
         if (!product) {
-            return res.status(404).json({ message: 'Produit non trouvé' });
+            return res.status(404).json({ 
+                message: 'Produit non trouvé' 
+            });
         }
         
         res.json(product);
         
     } catch (error) {
-        console.error('Erreur récupération produit:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
+        console.error('❌ Get product error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la récupération du produit' 
+        });
     }
 });
 
@@ -123,63 +119,17 @@ router.get('/:id', async (req, res) => {
 // @access  Private/Admin
 router.post('/', auth, requireAdmin, async (req, res) => {
     try {
-        const {
-            nom,
-            description,
-            prix,
-            prixOriginal,
-            stock,
-            categorie,
-            marque,
-            ingredients,
-            modeEmploi,
-            precautions,
-            image,
-            enVedette,
-            enPromotion,
-            actif
-        } = req.body;
+        console.log('📦 Creating new product:', req.body.nom);
         
-        // Validation
-        if (!nom || !description || prix === undefined || stock === undefined || !categorie) {
-            return res.status(400).json({
-                message: 'Veuillez remplir tous les champs obligatoires (nom, description, prix, stock, categorie)'
-            });
-        }
-        
-        // Create product data
         const productData = {
-            nom: nom.trim(),
-            description: description.trim(),
-            prix: parseFloat(prix),
-            stock: parseInt(stock),
-            categorie,
-            marque: marque ? marque.trim() : '',
-            actif: actif !== false,
-            enVedette: enVedette || false,
-            enPromotion: enPromotion || false
+            ...req.body,
+            dateAjout: new Date()
         };
-        
-        // Add optional fields
-        if (prixOriginal) {
-            productData.prixOriginal = parseFloat(prixOriginal);
-            
-            if (productData.enPromotion && productData.prixOriginal > productData.prix) {
-                productData.pourcentagePromotion = Math.round(
-                    (productData.prixOriginal - productData.prix) / productData.prixOriginal * 100
-                );
-            }
-        }
-        
-        if (ingredients) productData.ingredients = ingredients.trim();
-        if (modeEmploi) productData.modeEmploi = modeEmploi.trim();
-        if (precautions) productData.precautions = precautions.trim();
-        if (image) productData.image = image;
         
         const product = new Product(productData);
         await product.save();
         
-        console.log('✅ Product created:', product.nom);
+        console.log('✅ Product created successfully:', product._id);
         
         res.status(201).json({
             message: 'Produit créé avec succès',
@@ -187,7 +137,7 @@ router.post('/', auth, requireAdmin, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Create product error:', error);
+        console.error('❌ Product creation error:', error);
         
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
@@ -197,7 +147,7 @@ router.post('/', auth, requireAdmin, async (req, res) => {
         }
         
         res.status(500).json({
-            message: 'Erreur lors de la création du produit'
+            message: 'Erreur serveur lors de la création du produit'
         });
     }
 });
@@ -207,6 +157,8 @@ router.post('/', auth, requireAdmin, async (req, res) => {
 // @access  Private/Admin
 router.put('/:id', auth, requireAdmin, async (req, res) => {
     try {
+        console.log('📦 Updating product:', req.params.id);
+        
         const product = await Product.findById(req.params.id);
         
         if (!product) {
@@ -215,37 +167,16 @@ router.put('/:id', auth, requireAdmin, async (req, res) => {
             });
         }
         
-        // Update fields if provided
-        const allowedFields = [
-            'nom', 'description', 'prix', 'prixOriginal', 'stock', 'categorie',
-            'marque', 'ingredients', 'modeEmploi', 'precautions', 'image',
-            'enVedette', 'enPromotion', 'actif'
-        ];
-        
-        allowedFields.forEach(field => {
-            if (req.body[field] !== undefined) {
-                if (field === 'prix' || field === 'prixOriginal') {
-                    product[field] = parseFloat(req.body[field]);
-                } else if (field === 'stock') {
-                    product[field] = parseInt(req.body[field]);
-                } else {
-                    product[field] = req.body[field];
-                }
+        // Update product with new data
+        Object.keys(req.body).forEach(key => {
+            if (req.body[key] !== undefined) {
+                product[key] = req.body[key];
             }
         });
         
-        // Calculate promotion percentage if applicable
-        if (product.enPromotion && product.prixOriginal && product.prixOriginal > product.prix) {
-            product.pourcentagePromotion = Math.round(
-                (product.prixOriginal - product.prix) / product.prixOriginal * 100
-            );
-        } else {
-            product.pourcentagePromotion = 0;
-        }
-        
         await product.save();
         
-        console.log('✅ Product updated:', product.nom);
+        console.log('✅ Product updated successfully:', product._id);
         
         res.json({
             message: 'Produit mis à jour avec succès',
@@ -253,7 +184,7 @@ router.put('/:id', auth, requireAdmin, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Update product error:', error);
+        console.error('❌ Product update error:', error);
         
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
@@ -273,6 +204,8 @@ router.put('/:id', auth, requireAdmin, async (req, res) => {
 // @access  Private/Admin
 router.delete('/:id', auth, requireAdmin, async (req, res) => {
     try {
+        console.log('📦 Deleting product:', req.params.id);
+        
         const product = await Product.findById(req.params.id);
         
         if (!product) {
@@ -283,14 +216,14 @@ router.delete('/:id', auth, requireAdmin, async (req, res) => {
         
         await Product.findByIdAndDelete(req.params.id);
         
-        console.log('✅ Product deleted:', product.nom);
+        console.log('✅ Product deleted successfully:', req.params.id);
         
         res.json({
             message: 'Produit supprimé avec succès'
         });
         
     } catch (error) {
-        console.error('❌ Delete product error:', error);
+        console.error('❌ Product deletion error:', error);
         res.status(500).json({
             message: 'Erreur lors de la suppression du produit'
         });
@@ -315,14 +248,17 @@ router.get('/categories/all', async (req, res) => {
             { nom: 'Homme', description: 'Soins pour hommes' },
             { nom: 'Soins', description: 'Soins généraux' },
             { nom: 'Dentaire', description: 'Hygiène dentaire' },
-            { nom: 'Vitalité', description: 'Vitamines et suppléments alimentaires' }
+            { nom: 'Vitalité', description: 'Vitamines et suppléments alimentaires' },
+            { nom: 'Sport', description: 'Nutrition sportive' }
         ];
         
         res.json(categoriesInfo);
         
     } catch (error) {
-        console.error('Erreur récupération catégories:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
+        console.error('❌ Get categories error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la récupération des catégories' 
+        });
     }
 });
 
@@ -341,8 +277,10 @@ router.get('/featured/all', async (req, res) => {
         res.json(products);
         
     } catch (error) {
-        console.error('Erreur produits vedette:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
+        console.error('❌ Get featured products error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la récupération des produits vedette' 
+        });
     }
 });
 
@@ -361,8 +299,129 @@ router.get('/promotions/all', async (req, res) => {
         res.json(products);
         
     } catch (error) {
-        console.error('Erreur produits promotion:', error);
-        res.status(500).json({ message: 'Erreur serveur' });
+        console.error('❌ Get promotion products error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la récupération des produits en promotion' 
+        });
+    }
+});
+
+// @route   PUT /api/products/:id/toggle-featured
+// @desc    Toggle featured status (Admin only)
+// @access  Private/Admin
+router.put('/:id/toggle-featured', auth, requireAdmin, async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        
+        if (!product) {
+            return res.status(404).json({
+                message: 'Produit non trouvé'
+            });
+        }
+        
+        product.enVedette = !product.enVedette;
+        await product.save();
+        
+        res.json({
+            message: `Produit ${product.enVedette ? 'ajouté aux' : 'retiré des'} coups de coeur`,
+            product
+        });
+        
+    } catch (error) {
+        console.error('❌ Toggle featured error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la modification du statut vedette'
+        });
+    }
+});
+
+// @route   PUT /api/products/:id/toggle-promotion
+// @desc    Toggle promotion status (Admin only)
+// @access  Private/Admin
+router.put('/:id/toggle-promotion', auth, requireAdmin, async (req, res) => {
+    try {
+        const { enPromotion, prixOriginal, pourcentagePromotion } = req.body;
+        
+        const product = await Product.findById(req.params.id);
+        
+        if (!product) {
+            return res.status(404).json({
+                message: 'Produit non trouvé'
+            });
+        }
+        
+        product.enPromotion = enPromotion;
+        
+        if (enPromotion) {
+            if (prixOriginal) {
+                product.prixOriginal = prixOriginal;
+            }
+            if (pourcentagePromotion) {
+                product.pourcentagePromotion = pourcentagePromotion;
+            }
+        } else {
+            product.prixOriginal = null;
+            product.pourcentagePromotion = 0;
+        }
+        
+        await product.save();
+        
+        res.json({
+            message: `Promotion ${enPromotion ? 'activée' : 'désactivée'}`,
+            product
+        });
+        
+    } catch (error) {
+        console.error('❌ Toggle promotion error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la modification de la promotion'
+        });
+    }
+});
+
+// @route   GET /api/products/search/suggestions
+// @desc    Get search suggestions
+// @access  Public
+router.get('/search/suggestions', async (req, res) => {
+    try {
+        const { q } = req.query;
+        
+        if (!q || q.length < 2) {
+            return res.json([]);
+        }
+        
+        const suggestions = await Product.find({
+            actif: true,
+            $or: [
+                { nom: { $regex: q, $options: 'i' } },
+                { marque: { $regex: q, $options: 'i' } },
+                { categorie: { $regex: q, $options: 'i' } }
+            ]
+        })
+        .select('nom marque categorie')
+        .limit(5);
+        
+        const uniqueSuggestions = [];
+        const seen = new Set();
+        
+        suggestions.forEach(product => {
+            if (!seen.has(product.nom)) {
+                uniqueSuggestions.push({
+                    type: 'product',
+                    text: product.nom,
+                    category: product.categorie
+                });
+                seen.add(product.nom);
+            }
+        });
+        
+        res.json(uniqueSuggestions);
+        
+    } catch (error) {
+        console.error('❌ Search suggestions error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la récupération des suggestions' 
+        });
     }
 });
 

@@ -1,101 +1,141 @@
 const express = require('express');
-const mongoose = require('mongoose');
-const auth = require('../middleware/auth');
+const Product = require('../models/Product');
+const Order = require('../models/Order');
+const User = require('../models/User');
+const { auth, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Admin middleware
-const requireAdmin = (req, res, next) => {
-    if (!req.user || req.user.role !== 'admin') {
-        return res.status(403).json({
-            message: 'Accès administrateur requis'
-        });
-    }
-    next();
-};
+// Apply admin authentication to all admin routes
+router.use(auth);
+router.use(requireAdmin);
 
 // @route   GET /api/admin/dashboard
 // @desc    Get admin dashboard statistics
 // @access  Private/Admin
-router.get('/dashboard', auth, requireAdmin, async (req, res) => {
+router.get('/dashboard', async (req, res) => {
     try {
-        console.log('📊 Admin dashboard requested by:', req.user.email);
-        
-        const Product = mongoose.model('Product');
-        const Order = mongoose.model('Order');
-        const User = mongoose.model('User');
+        console.log('📊 Admin dashboard request');
         
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         
-        // Get basic statistics
-        const totalProducts = await Product.countDocuments({ actif: true });
-        const totalOrders = await Order.countDocuments();
-        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
-        const totalUsers = await User.countDocuments({ actif: true, role: 'user' });
-        
-        // Monthly orders
-        const monthlyOrders = await Order.countDocuments({
-            dateCommande: { $gte: startOfMonth }
-        });
-        
-        // Monthly revenue
-        const monthlyRevenueResult = await Order.aggregate([
-            {
-                $match: {
-                    dateCommande: { $gte: startOfMonth },
-                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
+        // Get various statistics
+        const [
+            totalProducts,
+            activeProducts,
+            featuredProducts,
+            totalOrders,
+            pendingOrders,
+            monthlyOrders,
+            dailyOrders,
+            totalUsers,
+            activeUsers,
+            monthlyRevenue,
+            ordersByStatus,
+            topProducts,
+            recentOrders
+        ] = await Promise.all([
+            // Product statistics
+            Product.countDocuments(),
+            Product.countDocuments({ actif: true }),
+            Product.countDocuments({ enVedette: true }),
+            
+            // Order statistics
+            Order.countDocuments(),
+            Order.countDocuments({ statut: 'en-attente' }),
+            Order.countDocuments({ 
+                dateCommande: { $gte: startOfMonth } 
+            }),
+            Order.countDocuments({ 
+                dateCommande: { $gte: startOfDay } 
+            }),
+            
+            // User statistics
+            User.countDocuments(),
+            User.countDocuments({ actif: true }),
+            
+            // Revenue calculation
+            Order.aggregate([
+                {
+                    $match: {
+                        dateCommande: { $gte: startOfMonth },
+                        statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        total: { $sum: '$total' }
+                    }
                 }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$total' }
+            ]),
+            
+            // Orders by status
+            Order.aggregate([
+                {
+                    $group: {
+                        _id: '$statut',
+                        count: { $sum: 1 }
+                    }
                 }
-            }
+            ]),
+            
+            // Top selling products (based on order frequency)
+            Order.aggregate([
+                { $unwind: '$articles' },
+                {
+                    $group: {
+                        _id: '$articles.productId',
+                        nom: { $first: '$articles.nom' },
+                        totalSold: { $sum: '$articles.quantite' },
+                        revenue: { $sum: { $multiply: ['$articles.prix', '$articles.quantite'] } }
+                    }
+                },
+                { $sort: { totalSold: -1 } },
+                { $limit: 5 }
+            ]),
+            
+            // Recent orders
+            Order.find()
+                .sort({ dateCommande: -1 })
+                .limit(5)
+                .select('numeroCommande client total statut dateCommande')
         ]);
         
-        const monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
-        
-        // Orders by status
-        const ordersByStatus = await Order.aggregate([
-            {
-                $group: {
-                    _id: '$statut',
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-        
-        // Recent orders
-        const recentOrders = await Order.find()
-            .sort({ dateCommande: -1 })
-            .limit(5)
-            .lean();
-        
-        // Low stock products
-        const lowStockProducts = await Product.find({
-            stock: { $lte: 5 },
-            actif: true
-        }).limit(10).lean();
-        
-        res.json({
-            success: true,
-            stats: {
-                totalProducts,
-                totalOrders,
-                pendingOrders,
-                totalUsers,
-                monthlyOrders,
-                monthlyRevenue
+        const dashboardData = {
+            products: {
+                total: totalProducts,
+                active: activeProducts,
+                featured: featuredProducts,
+                inactive: totalProducts - activeProducts
             },
-            ordersByStatus: ordersByStatus.reduce((acc, item) => {
-                acc[item._id] = item.count;
-                return acc;
-            }, {}),
-            recentOrders,
-            lowStockProducts
-        });
+            orders: {
+                total: totalOrders,
+                pending: pendingOrders,
+                monthly: monthlyOrders,
+                daily: dailyOrders,
+                byStatus: ordersByStatus.reduce((acc, item) => {
+                    acc[item._id] = item.count;
+                    return acc;
+                }, {})
+            },
+            users: {
+                total: totalUsers,
+                active: activeUsers,
+                inactive: totalUsers - activeUsers
+            },
+            revenue: {
+                monthly: monthlyRevenue[0]?.total || 0,
+                average: monthlyOrders > 0 ? Math.round((monthlyRevenue[0]?.total || 0) / monthlyOrders) : 0
+            },
+            topProducts: topProducts,
+            recentOrders: recentOrders
+        };
+        
+        res.json(dashboardData);
         
     } catch (error) {
         console.error('❌ Admin dashboard error:', error);
@@ -105,148 +145,30 @@ router.get('/dashboard', auth, requireAdmin, async (req, res) => {
     }
 });
 
-// @route   GET /api/admin/orders
-// @desc    Get all orders for admin
-// @access  Private/Admin
-router.get('/orders', auth, requireAdmin, async (req, res) => {
-    try {
-        console.log('📦 Admin getting all orders');
-        
-        const Order = mongoose.model('Order');
-        
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 50;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
-        
-        // Filter by status
-        if (req.query.statut) {
-            query.statut = req.query.statut;
-        }
-        
-        // Filter by date range
-        if (req.query.dateFrom || req.query.dateTo) {
-            query.dateCommande = {};
-            if (req.query.dateFrom) {
-                query.dateCommande.$gte = new Date(req.query.dateFrom);
-            }
-            if (req.query.dateTo) {
-                query.dateCommande.$lte = new Date(req.query.dateTo);
-            }
-        }
-        
-        const orders = await Order.find(query)
-            .sort({ dateCommande: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
-            
-        const total = await Order.countDocuments(query);
-        const totalPages = Math.ceil(total / limit);
-        
-        console.log(`✅ Found ${orders.length} orders for admin`);
-        
-        res.json({
-            success: true,
-            orders,
-            pagination: {
-                currentPage: page,
-                totalPages,
-                totalOrders: total,
-                hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Admin get orders error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des commandes'
-        });
-    }
-});
-
-// @route   PUT /api/admin/orders/:id
-// @desc    Update order status (Admin only)
-// @access  Private/Admin
-router.put('/orders/:id', auth, requireAdmin, async (req, res) => {
-    try {
-        const { statut } = req.body;
-        const Order = mongoose.model('Order');
-        
-        const order = await Order.findById(req.params.id);
-        
-        if (!order) {
-            return res.status(404).json({
-                message: 'Commande non trouvée'
-            });
-        }
-        
-        // Validate status
-        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
-        if (!validStatuses.includes(statut)) {
-            return res.status(400).json({
-                message: 'Statut de commande invalide'
-            });
-        }
-        
-        order.statut = statut;
-        
-        // Set delivery date if delivered
-        if (statut === 'livrée') {
-            order.dateLivraison = new Date();
-        }
-        
-        await order.save();
-        
-        console.log(`✅ Order ${order.numeroCommande} status updated to: ${statut}`);
-        
-        res.json({
-            success: true,
-            message: 'Statut de commande mis à jour',
-            order: {
-                _id: order._id,
-                numeroCommande: order.numeroCommande,
-                statut: order.statut,
-                dateLivraison: order.dateLivraison
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Update order error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la mise à jour de la commande'
-        });
-    }
-});
-
 // @route   GET /api/admin/products
-// @desc    Get all products for admin (including inactive)
+// @desc    Get all products for admin management
 // @access  Private/Admin
-router.get('/products', auth, requireAdmin, async (req, res) => {
+router.get('/products', async (req, res) => {
     try {
-        console.log('📦 Admin getting all products');
-        
-        const Product = mongoose.model('Product');
-        
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 50;
         const skip = (page - 1) * limit;
         
         let query = {};
         
-        // Filter by category
+        // Filters
         if (req.query.categorie) {
             query.categorie = req.query.categorie;
         }
         
-        // Filter by status
         if (req.query.actif !== undefined) {
             query.actif = req.query.actif === 'true';
         }
         
-        // Search
+        if (req.query.enVedette !== undefined) {
+            query.enVedette = req.query.enVedette === 'true';
+        }
+        
         if (req.query.search) {
             query.$or = [
                 { nom: { $regex: req.query.search, $options: 'i' } },
@@ -255,19 +177,40 @@ router.get('/products', auth, requireAdmin, async (req, res) => {
             ];
         }
         
+        // Sort
+        let sort = { dateAjout: -1 };
+        if (req.query.sort) {
+            switch (req.query.sort) {
+                case 'name_asc':
+                    sort = { nom: 1 };
+                    break;
+                case 'name_desc':
+                    sort = { nom: -1 };
+                    break;
+                case 'price_asc':
+                    sort = { prix: 1 };
+                    break;
+                case 'price_desc':
+                    sort = { prix: -1 };
+                    break;
+                case 'stock_asc':
+                    sort = { stock: 1 };
+                    break;
+                case 'stock_desc':
+                    sort = { stock: -1 };
+                    break;
+            }
+        }
+        
         const products = await Product.find(query)
-            .sort({ dateAjout: -1 })
+            .sort(sort)
             .skip(skip)
-            .limit(limit)
-            .lean();
+            .limit(limit);
             
         const total = await Product.countDocuments(query);
         const totalPages = Math.ceil(total / limit);
         
-        console.log(`✅ Found ${products.length} products for admin`);
-        
         res.json({
-            success: true,
             products,
             pagination: {
                 currentPage: page,
@@ -279,7 +222,7 @@ router.get('/products', auth, requireAdmin, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Admin get products error:', error);
+        console.error('❌ Admin products error:', error);
         res.status(500).json({
             message: 'Erreur lors de la récupération des produits'
         });
@@ -287,78 +230,29 @@ router.get('/products', auth, requireAdmin, async (req, res) => {
 });
 
 // @route   POST /api/admin/products
-// @desc    Create new product (Admin only)
+// @desc    Create new product
 // @access  Private/Admin
-router.post('/products', auth, requireAdmin, async (req, res) => {
+router.post('/products', async (req, res) => {
     try {
-        const Product = mongoose.model('Product');
+        console.log('📦 Admin creating new product:', req.body.nom);
         
-        const {
-            nom,
-            description,
-            prix,
-            prixOriginal,
-            stock,
-            categorie,
-            marque,
-            ingredients,
-            modeEmploi,
-            precautions,
-            image,
-            enVedette,
-            enPromotion,
-            actif
-        } = req.body;
-        
-        // Validation
-        if (!nom || !description || prix === undefined || stock === undefined || !categorie) {
-            return res.status(400).json({
-                message: 'Veuillez remplir tous les champs obligatoires (nom, description, prix, stock, categorie)'
-            });
-        }
-        
-        // Create product data
         const productData = {
-            nom: nom.trim(),
-            description: description.trim(),
-            prix: parseFloat(prix),
-            stock: parseInt(stock),
-            categorie,
-            marque: marque ? marque.trim() : '',
-            actif: actif !== false,
-            enVedette: enVedette || false,
-            enPromotion: enPromotion || false
+            ...req.body,
+            dateAjout: new Date()
         };
-        
-        // Add optional fields
-        if (prixOriginal) {
-            productData.prixOriginal = parseFloat(prixOriginal);
-            
-            if (productData.enPromotion && productData.prixOriginal > productData.prix) {
-                productData.pourcentagePromotion = Math.round(
-                    (productData.prixOriginal - productData.prix) / productData.prixOriginal * 100
-                );
-            }
-        }
-        
-        if (ingredients) productData.ingredients = ingredients.trim();
-        if (modeEmploi) productData.modeEmploi = modeEmploi.trim();
-        if (precautions) productData.precautions = precautions.trim();
-        if (image) productData.image = image;
         
         const product = new Product(productData);
         await product.save();
         
-        console.log('✅ Product created by admin:', product.nom);
+        console.log('✅ Product created successfully:', product._id);
         
         res.status(201).json({
-            success: true,
             message: 'Produit créé avec succès',
             product
         });
         
     } catch (error) {
-        console.error('❌ Admin create product error:', error);
+        console.error('❌ Product creation error:', error);
         
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
@@ -368,17 +262,17 @@ router.post('/products', auth, requireAdmin, async (req, res) => {
         }
         
         res.status(500).json({
-            message: 'Erreur lors de la création du produit'
+            message: 'Erreur serveur lors de la création du produit'
         });
     }
 });
 
 // @route   PUT /api/admin/products/:id
-// @desc    Update product (Admin only)
+// @desc    Update product
 // @access  Private/Admin
-router.put('/products/:id', auth, requireAdmin, async (req, res) => {
+router.put('/products/:id', async (req, res) => {
     try {
-        const Product = mongoose.model('Product');
+        console.log('📦 Admin updating product:', req.params.id);
         
         const product = await Product.findById(req.params.id);
         
@@ -388,46 +282,24 @@ router.put('/products/:id', auth, requireAdmin, async (req, res) => {
             });
         }
         
-        // Update fields if provided
-        const allowedFields = [
-            'nom', 'description', 'prix', 'prixOriginal', 'stock', 'categorie',
-            'marque', 'ingredients', 'modeEmploi', 'precautions', 'image',
-            'enVedette', 'enPromotion', 'actif'
-        ];
-        
-        allowedFields.forEach(field => {
-            if (req.body[field] !== undefined) {
-                if (field === 'prix' || field === 'prixOriginal') {
-                    product[field] = parseFloat(req.body[field]);
-                } else if (field === 'stock') {
-                    product[field] = parseInt(req.body[field]);
-                } else {
-                    product[field] = req.body[field];
-                }
+        // Update product with new data
+        Object.keys(req.body).forEach(key => {
+            if (req.body[key] !== undefined) {
+                product[key] = req.body[key];
             }
         });
         
-        // Calculate promotion percentage if applicable
-        if (product.enPromotion && product.prixOriginal && product.prixOriginal > product.prix) {
-            product.pourcentagePromotion = Math.round(
-                (product.prixOriginal - product.prix) / product.prixOriginal * 100
-            );
-        } else {
-            product.pourcentagePromotion = 0;
-        }
-        
         await product.save();
         
-        console.log('✅ Product updated by admin:', product.nom);
+        console.log('✅ Product updated successfully:', product._id);
         
         res.json({
-            success: true,
             message: 'Produit mis à jour avec succès',
             product
         });
         
     } catch (error) {
-        console.error('❌ Admin update product error:', error);
+        console.error('❌ Product update error:', error);
         
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
@@ -443,11 +315,11 @@ router.put('/products/:id', auth, requireAdmin, async (req, res) => {
 });
 
 // @route   DELETE /api/admin/products/:id
-// @desc    Delete product (Admin only)
+// @desc    Delete product
 // @access  Private/Admin
-router.delete('/products/:id', auth, requireAdmin, async (req, res) => {
+router.delete('/products/:id', async (req, res) => {
     try {
-        const Product = mongoose.model('Product');
+        console.log('📦 Admin deleting product:', req.params.id);
         
         const product = await Product.findById(req.params.id);
         
@@ -459,15 +331,14 @@ router.delete('/products/:id', auth, requireAdmin, async (req, res) => {
         
         await Product.findByIdAndDelete(req.params.id);
         
-        console.log('✅ Product deleted by admin:', product.nom);
+        console.log('✅ Product deleted successfully:', req.params.id);
         
         res.json({
-            success: true,
             message: 'Produit supprimé avec succès'
         });
         
     } catch (error) {
-        console.error('❌ Admin delete product error:', error);
+        console.error('❌ Product deletion error:', error);
         res.status(500).json({
             message: 'Erreur lors de la suppression du produit'
         });
@@ -475,28 +346,48 @@ router.delete('/products/:id', auth, requireAdmin, async (req, res) => {
 });
 
 // @route   GET /api/admin/users
-// @desc    Get all users (Admin only)
+// @desc    Get all users for admin management
 // @access  Private/Admin
-router.get('/users', auth, requireAdmin, async (req, res) => {
+router.get('/users', async (req, res) => {
     try {
-        const User = mongoose.model('User');
-        
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
         
-        const users = await User.find({ role: 'user' })
-            .select('-password')
+        let query = {};
+        
+        // Filters
+        if (req.query.role) {
+            query.role = req.query.role;
+        }
+        
+        if (req.query.actif !== undefined) {
+            query.actif = req.query.actif === 'true';
+        }
+        
+        if (req.query.wilaya) {
+            query.wilaya = req.query.wilaya;
+        }
+        
+        if (req.query.search) {
+            query.$or = [
+                { nom: { $regex: req.query.search, $options: 'i' } },
+                { prenom: { $regex: req.query.search, $options: 'i' } },
+                { email: { $regex: req.query.search, $options: 'i' } },
+                { telephone: { $regex: req.query.search, $options: 'i' } }
+            ];
+        }
+        
+        const users = await User.find(query)
+            .select('-password -resetPasswordToken -emailVerificationToken')
             .sort({ dateInscription: -1 })
             .skip(skip)
-            .limit(limit)
-            .lean();
+            .limit(limit);
             
-        const total = await User.countDocuments({ role: 'user' });
+        const total = await User.countDocuments(query);
         const totalPages = Math.ceil(total / limit);
         
         res.json({
-            success: true,
             users,
             pagination: {
                 currentPage: page,
@@ -508,9 +399,190 @@ router.get('/users', auth, requireAdmin, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Admin get users error:', error);
+        console.error('❌ Admin users error:', error);
         res.status(500).json({
             message: 'Erreur lors de la récupération des utilisateurs'
+        });
+    }
+});
+
+// @route   PUT /api/admin/users/:id
+// @desc    Update user (admin can change role, activate/deactivate)
+// @access  Private/Admin
+router.put('/users/:id', async (req, res) => {
+    try {
+        console.log('👤 Admin updating user:', req.params.id);
+        
+        const user = await User.findById(req.params.id);
+        
+        if (!user) {
+            return res.status(404).json({
+                message: 'Utilisateur non trouvé'
+            });
+        }
+        
+        // Only allow admin to update specific fields
+        const allowedUpdates = ['role', 'actif', 'emailVerifie', 'telephoneVerifie'];
+        
+        allowedUpdates.forEach(field => {
+            if (req.body[field] !== undefined) {
+                user[field] = req.body[field];
+            }
+        });
+        
+        await user.save();
+        
+        console.log('✅ User updated successfully:', user._id);
+        
+        res.json({
+            message: 'Utilisateur mis à jour avec succès',
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                role: user.role,
+                actif: user.actif
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ User update error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de l\'utilisateur'
+        });
+    }
+});
+
+// @route   DELETE /api/admin/users/:id
+// @desc    Delete user
+// @access  Private/Admin
+router.delete('/users/:id', async (req, res) => {
+    try {
+        console.log('👤 Admin deleting user:', req.params.id);
+        
+        // Don't allow admin to delete themselves
+        if (req.params.id === req.user.id) {
+            return res.status(400).json({
+                message: 'Vous ne pouvez pas supprimer votre propre compte'
+            });
+        }
+        
+        const user = await User.findById(req.params.id);
+        
+        if (!user) {
+            return res.status(404).json({
+                message: 'Utilisateur non trouvé'
+            });
+        }
+        
+        await User.findByIdAndDelete(req.params.id);
+        
+        console.log('✅ User deleted successfully:', req.params.id);
+        
+        res.json({
+            message: 'Utilisateur supprimé avec succès'
+        });
+        
+    } catch (error) {
+        console.error('❌ User deletion error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la suppression de l\'utilisateur'
+        });
+    }
+});
+
+// @route   GET /api/admin/analytics
+// @desc    Get detailed analytics
+// @access  Private/Admin
+router.get('/analytics', async (req, res) => {
+    try {
+        const days = parseInt(req.query.days) || 30;
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - days);
+        
+        // Daily orders analytics
+        const dailyOrders = await Order.aggregate([
+            {
+                $match: {
+                    dateCommande: { $gte: startDate }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: '$dateCommande' },
+                        month: { $month: '$dateCommande' },
+                        day: { $dayOfMonth: '$dateCommande' }
+                    },
+                    count: { $sum: 1 },
+                    revenue: { $sum: '$total' }
+                }
+            },
+            {
+                $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+            }
+        ]);
+        
+        // Category analytics
+        const categoryAnalytics = await Order.aggregate([
+            { $unwind: '$articles' },
+            {
+                $lookup: {
+                    from: 'products',
+                    localField: 'articles.productId',
+                    foreignField: '_id',
+                    as: 'productInfo'
+                }
+            },
+            { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } },
+            {
+                $group: {
+                    _id: '$productInfo.categorie',
+                    totalSold: { $sum: '$articles.quantite' },
+                    revenue: { $sum: { $multiply: ['$articles.prix', '$articles.quantite'] } }
+                }
+            },
+            { $sort: { revenue: -1 } }
+        ]);
+        
+        // User registration analytics
+        const userRegistrations = await User.aggregate([
+            {
+                $match: {
+                    dateInscription: { $gte: startDate }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: '$dateInscription' },
+                        month: { $month: '$dateInscription' },
+                        day: { $dayOfMonth: '$dateInscription' }
+                    },
+                    count: { $sum: 1 }
+                }
+            },
+            {
+                $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+            }
+        ]);
+        
+        res.json({
+            dailyOrders,
+            categoryAnalytics,
+            userRegistrations,
+            period: {
+                days,
+                startDate,
+                endDate: new Date()
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Admin analytics error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des analyses'
         });
     }
 });

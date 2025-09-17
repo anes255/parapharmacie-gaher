@@ -1,270 +1,307 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
 
 // CORS configuration
-const corsOptions = {
-    origin: [
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://localhost:5173',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:3001',
-        'http://127.0.0.1:5173',
-        'https://parapharmacieshifa.com',
-        'http://parapharmacieshifa.com',
-        'https://parapharmacie-frontend.vercel.app',
-        'https://*.vercel.app'
-    ],
-    credentials: false,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: [
-        'Content-Type', 
-        'Authorization', 
-        'x-auth-token',
-        'Origin',
-        'X-Requested-With',
-        'Accept'
-    ]
-};
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token']
+}));
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Basic middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Request logging
+// Logging
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-    if (req.body && Object.keys(req.body).length > 0) {
-        console.log('Request body:', JSON.stringify(req.body, null, 2));
-    }
     next();
 });
+
+// Simple User Schema
+const UserSchema = new mongoose.Schema({
+    nom: { type: String, required: true },
+    prenom: { type: String, required: true },
+    email: { type: String, required: true, unique: true, lowercase: true },
+    password: { type: String, required: true, select: false },
+    telephone: { type: String, required: true },
+    adresse: String,
+    ville: String,
+    wilaya: { type: String, required: true },
+    codePostal: String,
+    role: { type: String, enum: ['client', 'admin'], default: 'client' },
+    actif: { type: Boolean, default: true },
+    dateInscription: { type: Date, default: Date.now },
+    dernierConnexion: Date
+});
+
+// Hash password before saving
+UserSchema.pre('save', async function(next) {
+    if (!this.isModified('password')) return next();
+    this.password = await bcrypt.hash(this.password, 12);
+    next();
+});
+
+// Compare password method
+UserSchema.methods.comparePassword = async function(password) {
+    return await bcrypt.compare(password, this.password);
+};
+
+const User = mongoose.model('User', UserSchema);
+
+// Generate JWT
+const generateToken = (id) => {
+    return jwt.sign({ id }, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024', {
+        expiresIn: '30d'
+    });
+};
+
+// Auth middleware
+const auth = async (req, res, next) => {
+    try {
+        const token = req.header('x-auth-token');
+        if (!token) {
+            return res.status(401).json({ message: 'Token manquant' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+        const user = await User.findById(decoded.id);
+        
+        if (!user) {
+            return res.status(401).json({ message: 'Utilisateur non trouvé' });
+        }
+
+        req.user = { id: user._id, role: user.role };
+        next();
+    } catch (error) {
+        res.status(401).json({ message: 'Token invalide' });
+    }
+};
 
 // ROOT ROUTE
 app.get('/', (req, res) => {
     res.json({
-        message: 'Shifa Parapharmacie Backend API',
+        message: 'Shifa Parapharmacie API',
         status: 'running',
-        timestamp: new Date().toISOString(),
-        version: '2.0.0'
+        timestamp: new Date().toISOString()
     });
 });
 
-// Health check
+// HEALTH CHECK
 app.get('/api/health', (req, res) => {
-    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
     res.json({
         message: 'API is healthy',
-        timestamp: new Date().toISOString(),
         status: 'running',
-        database: dbStatus,
-        environment: process.env.NODE_ENV || 'development'
+        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString()
     });
 });
 
-// MongoDB Connection with retry logic
+// AUTH ROUTES - DIRECTLY IN SERVER FILE
+// Register
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        console.log('📝 Registration attempt:', req.body.email);
+        
+        const { nom, prenom, email, password, telephone, wilaya, adresse, ville, codePostal } = req.body;
+        
+        if (!nom || !prenom || !email || !password || !telephone || !wilaya) {
+            return res.status(400).json({ message: 'Tous les champs requis doivent être remplis' });
+        }
+
+        const existingUser = await User.findOne({ email: email.toLowerCase() });
+        if (existingUser) {
+            return res.status(400).json({ message: 'Un utilisateur avec cet email existe déjà' });
+        }
+
+        const existingPhone = await User.findOne({ telephone });
+        if (existingPhone) {
+            return res.status(400).json({ message: 'Ce numéro de téléphone est déjà utilisé' });
+        }
+
+        const user = new User({
+            nom: nom.trim(),
+            prenom: prenom.trim(),
+            email: email.toLowerCase().trim(),
+            password,
+            telephone: telephone.replace(/\s+/g, ''),
+            adresse: adresse || '',
+            ville: ville || '',
+            wilaya,
+            codePostal: codePostal || ''
+        });
+
+        await user.save();
+        console.log('✅ User registered:', user.email);
+
+        const token = generateToken(user._id);
+        
+        res.status(201).json({
+            message: 'Inscription réussie',
+            token,
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                role: user.role
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Registration error:', error);
+        res.status(500).json({ message: 'Erreur serveur lors de l\'inscription' });
+    }
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        console.log('🔐 Login attempt:', req.body.email);
+        
+        const { email, password } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({ message: 'Email et mot de passe requis' });
+        }
+
+        const user = await User.findOne({ 
+            email: email.toLowerCase(),
+            actif: true 
+        }).select('+password');
+
+        if (!user) {
+            console.log('❌ User not found:', email);
+            return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
+        }
+
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) {
+            console.log('❌ Password mismatch for:', email);
+            return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
+        }
+
+        console.log('✅ Login successful:', user.email, 'Role:', user.role);
+
+        const token = generateToken(user._id);
+        
+        // Update last connection
+        user.dernierConnexion = new Date();
+        await user.save();
+
+        res.json({
+            message: 'Connexion réussie',
+            token,
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                role: user.role,
+                dateInscription: user.dateInscription,
+                dernierConnexion: user.dernierConnexion
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Login error:', error);
+        res.status(500).json({ message: 'Erreur serveur lors de la connexion' });
+    }
+});
+
+// Get Profile
+app.get('/api/auth/profile', auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ message: 'Utilisateur non trouvé' });
+        }
+
+        res.json({
+            id: user._id,
+            nom: user.nom,
+            prenom: user.prenom,
+            email: user.email,
+            telephone: user.telephone,
+            adresse: user.adresse,
+            ville: user.ville,
+            wilaya: user.wilaya,
+            codePostal: user.codePostal,
+            role: user.role,
+            dateInscription: user.dateInscription,
+            dernierConnexion: user.dernierConnexion
+        });
+
+    } catch (error) {
+        console.error('❌ Profile error:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// Create Admin User Function
+async function createAdminUser() {
+    try {
+        const adminExists = await User.findOne({ role: 'admin' });
+        if (adminExists) {
+            console.log('✅ Admin user already exists');
+            return;
+        }
+
+        const admin = new User({
+            nom: 'Gaher',
+            prenom: 'Parapharmacie',
+            email: 'pharmaciegaher@gmail.com',
+            password: 'anesaya75',
+            telephone: '+213123456789',
+            adresse: 'Tipaza, Algérie',
+            wilaya: 'Tipaza',
+            role: 'admin'
+        });
+
+        await admin.save();
+        console.log('✅ Admin user created successfully');
+
+    } catch (error) {
+        console.error('❌ Admin creation error:', error);
+    }
+}
+
+// MongoDB Connection
 const connectDB = async () => {
     try {
         console.log('🔄 Connecting to MongoDB...');
         
-        const mongoUri = process.env.MONGODB_URI;
-        if (!mongoUri) {
-            throw new Error('MONGODB_URI environment variable not set');
-        }
-        
-        console.log('MongoDB URI:', mongoUri.replace(/\/\/.*:.*@/, '//***:***@'));
-        
-        const conn = await mongoose.connect(mongoUri, {
+        await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
-            useUnifiedTopology: true,
-            serverSelectionTimeoutMS: 30000, // 30 seconds
-            socketTimeoutMS: 45000, // 45 seconds
-            family: 4 // Force IPv4
+            useUnifiedTopology: true
         });
         
-        console.log('✅ MongoDB connected:', conn.connection.host);
-        
-        // Initialize admin user after successful connection
-        await initializeAdmin();
-        
-        return true;
+        console.log('✅ MongoDB connected');
+        await createAdminUser();
         
     } catch (error) {
-        console.error('❌ MongoDB connection failed:', error.message);
-        
-        // Retry connection after 10 seconds
-        console.log('🔄 Retrying connection in 10 seconds...');
+        console.error('❌ MongoDB connection failed:', error);
         setTimeout(connectDB, 10000);
-        return false;
     }
 };
 
-// Initialize admin user
-async function initializeAdmin() {
-    try {
-        console.log('🔧 Initializing admin user...');
-        
-        // Dynamically require User model to avoid circular dependency issues
-        const User = require('./models/User');
-        const bcrypt = require('bcryptjs');
-        
-        // Check if any admin exists
-        let admin = await User.findOne({ role: 'admin' });
-        
-        if (!admin) {
-            console.log('📝 Creating default admin user...');
-            
-            admin = new User({
-                nom: 'Gaher',
-                prenom: 'Parapharmacie',
-                email: 'pharmaciegaher@gmail.com',
-                telephone: '+213123456789',
-                adresse: 'Tipaza, Algérie',
-                wilaya: 'Tipaza',
-                password: 'anesaya75', // Will be hashed automatically
-                role: 'admin',
-                actif: true
-            });
-            
-            await admin.save();
-            console.log('✅ Admin user created successfully');
-        } else {
-            console.log('✅ Admin user already exists');
-        }
-        
-        // Log admin info for debugging
-        console.log('Admin user info:', {
-            email: admin.email,
-            role: admin.role,
-            actif: admin.actif
-        });
-        
-    } catch (error) {
-        console.error('❌ Admin initialization failed:', error.message);
-        if (error.name === 'ValidationError') {
-            console.error('Validation errors:', Object.values(error.errors).map(err => err.message));
-        }
-    }
-}
-
-// Load routes with better error handling
-const loadRoutes = () => {
-    try {
-        console.log('🔧 Loading routes...');
-        
-        // Auth routes
-        try {
-            const authRoutes = require('./routes/auth');
-            app.use('/api/auth', authRoutes);
-            console.log('✅ Auth routes loaded');
-        } catch (error) {
-            console.error('❌ Auth routes failed to load:', error.message);
-        }
-        
-        // Product routes
-        try {
-            const productRoutes = require('./routes/products');
-            app.use('/api/products', productRoutes);
-            console.log('✅ Product routes loaded');
-        } catch (error) {
-            console.error('❌ Product routes failed to load:', error.message);
-        }
-        
-        // Order routes
-        try {
-            const orderRoutes = require('./routes/orders');
-            app.use('/api/orders', orderRoutes);
-            console.log('✅ Order routes loaded');
-        } catch (error) {
-            console.error('❌ Order routes failed to load:', error.message);
-        }
-        
-        // Admin routes
-        try {
-            const adminRoutes = require('./routes/admin');
-            app.use('/api/admin', adminRoutes);
-            console.log('✅ Admin routes loaded');
-        } catch (error) {
-            console.error('❌ Admin routes failed to load:', error.message);
-        }
-        
-        // Settings routes
-        try {
-            const settingsRoutes = require('./routes/settings');
-            app.use('/api/settings', settingsRoutes);
-            console.log('✅ Settings routes loaded');
-        } catch (error) {
-            console.error('❌ Settings routes failed to load:', error.message);
-        }
-        
-        console.log('✅ All routes loaded');
-        
-    } catch (error) {
-        console.error('❌ Route loading failed:', error.message);
-    }
-};
-
-// Load routes
-loadRoutes();
-
-// Global error handler
+// Error handler
 app.use((error, req, res, next) => {
-    console.error('🔥 Server error:', error);
-    
-    // MongoDB errors
-    if (error.name === 'CastError') {
-        return res.status(400).json({ 
-            message: 'ID invalide',
-            timestamp: new Date().toISOString()
-        });
-    }
-    
-    // Validation errors
-    if (error.name === 'ValidationError') {
-        const messages = Object.values(error.errors).map(err => err.message);
-        return res.status(400).json({
-            message: messages[0] || 'Données invalides',
-            timestamp: new Date().toISOString()
-        });
-    }
-    
-    // Duplicate key errors
-    if (error.code === 11000) {
-        const field = Object.keys(error.keyPattern)[0];
-        return res.status(400).json({
-            message: `${field} déjà utilisé`,
-            timestamp: new Date().toISOString()
-        });
-    }
-    
-    // JWT errors
-    if (error.name === 'JsonWebTokenError') {
-        return res.status(401).json({
-            message: 'Token invalide',
-            timestamp: new Date().toISOString()
-        });
-    }
-    
-    if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({
-            message: 'Token expiré',
-            timestamp: new Date().toISOString()
-        });
-    }
-    
-    // Default error
-    res.status(error.statusCode || 500).json({ 
-        message: error.message || 'Erreur serveur interne',
-        timestamp: new Date().toISOString()
-    });
+    console.error('Server error:', error);
+    res.status(500).json({ message: 'Erreur serveur' });
 });
 
 // 404 handler
@@ -278,47 +315,12 @@ app.use('*', (req, res) => {
     });
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('🛑 SIGTERM received, shutting down gracefully');
-    process.exit(0);
-});
+// Start server
+connectDB();
 
-process.on('SIGINT', () => {
-    console.log('🛑 SIGINT received, shutting down gracefully');
-    process.exit(0);
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌐 Health: http://localhost:${PORT}/api/health`);
+    console.log(`🔐 Login: http://localhost:${PORT}/api/auth/login`);
 });
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err, promise) => {
-    console.error('❌ Unhandled Promise Rejection:', err);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-    console.error('❌ Uncaught Exception:', err);
-    process.exit(1);
-});
-
-// Connect to database first, then start server
-connectDB().then((connected) => {
-    if (connected) {
-        startServer();
-    } else {
-        console.log('⏳ Server will start once database connection is established');
-    }
-});
-
-function startServer() {
-    const PORT = process.env.PORT || 5000;
-    
-    app.listen(PORT, () => {
-        console.log('🚀 Server Status:');
-        console.log(`   Port: ${PORT}`);
-        console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-        console.log(`   Database: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'}`);
-        console.log(`   Health: http://localhost:${PORT}/api/health`);
-        console.log(`   API Base: http://localhost:${PORT}/api`);
-        console.log('🎉 Server ready to accept connections');
-    });
-}

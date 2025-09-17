@@ -1,110 +1,98 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-// Enhanced authentication middleware function
 const auth = async (req, res, next) => {
-    // Get token from header
-    let token = req.header('x-auth-token') || req.header('Authorization');
-    
-    // Handle Bearer token format
-    if (token && token.startsWith('Bearer ')) {
-        token = token.slice(7, token.length);
-    }
-
-    // Check if no token
-    if (!token) {
-        console.log('❌ No token provided');
-        return res.status(401).json({ 
-            message: 'Aucun token fourni, accès refusé' 
-        });
-    }
-
     try {
-        // For demo purposes, handle demo tokens
-        if (token === 'admin-demo-token') {
-            req.user = {
-                id: 'admin-1',
-                role: 'admin',
-                email: 'pharmaciegaher@gmail.com',
-                prenom: 'Admin',
-                nom: 'Shifa'
-            };
-            console.log('✅ Demo admin token accepted');
-            next();
-            return;
-        }
-
-        if (token === 'user-demo-token') {
-            req.user = {
-                id: 'user-demo',
-                role: 'user',
-                email: 'user@demo.com',
-                prenom: 'User',
-                nom: 'Demo'
-            };
-            console.log('✅ Demo user token accepted');
-            next();
-            return;
-        }
-
-        // Verify JWT token
-        const jwtSecret = process.env.JWT_SECRET || 'fallback_secret_key_for_development';
-        const decoded = jwt.verify(token, jwtSecret);
+        // Get token from header
+        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
         
-        console.log('🔐 Token decoded:', decoded);
-
-        // Try to get user from database if User model is available
+        if (!token) {
+            return res.status(401).json({
+                message: 'Aucun token fourni, accès refusé'
+            });
+        }
+        
         try {
-            const User = require('../models/User');
-            const user = await User.findById(decoded.id).select('-password');
+            // Verify token
+            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
             
-            if (!user) {
-                console.log('❌ User not found for token');
-                return res.status(401).json({ 
-                    message: 'Token invalide - utilisateur non trouvé' 
+            // Find user
+            const user = await User.findById(decoded.id);
+            
+            if (!user || !user.actif) {
+                return res.status(401).json({
+                    message: 'Token invalide - utilisateur introuvable'
                 });
             }
-
+            
+            // Add user to request
             req.user = {
                 id: user._id,
-                role: user.role || 'user',
                 email: user.email,
-                prenom: user.prenom,
-                nom: user.nom
+                role: user.role
             };
             
-            console.log('✅ User authenticated:', req.user.email);
-        } catch (modelError) {
-            // If User model doesn't exist or database is not connected, use decoded token
-            console.log('⚠️ User model not available, using token data only');
-            req.user = {
-                id: decoded.id,
-                role: decoded.role || 'user',
-                email: decoded.email,
-                prenom: decoded.prenom || 'User',
-                nom: decoded.nom || 'Demo'
-            };
+            next();
+            
+        } catch (tokenError) {
+            console.error('Token verification failed:', tokenError.message);
+            return res.status(401).json({
+                message: 'Token invalide'
+            });
+        }
+        
+    } catch (error) {
+        console.error('Auth middleware error:', error);
+        res.status(500).json({
+            message: 'Erreur serveur d\'authentification'
+        });
+    }
+};
+
+// Admin middleware
+const admin = (req, res, next) => {
+    if (req.user && req.user.role === 'admin') {
+        next();
+    } else {
+        res.status(403).json({
+            message: 'Accès refusé - droits administrateur requis'
+        });
+    }
+};
+
+// Optional auth middleware (doesn't fail if no token)
+const optionalAuth = async (req, res, next) => {
+    try {
+        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
+        
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+                const user = await User.findById(decoded.id);
+                
+                if (user && user.actif) {
+                    req.user = {
+                        id: user._id,
+                        email: user.email,
+                        role: user.role
+                    };
+                }
+            } catch (tokenError) {
+                // Token invalid but continue anyway
+                console.log('Optional auth - invalid token:', tokenError.message);
+            }
         }
         
         next();
         
     } catch (error) {
-        console.error('❌ Token verification error:', error.message);
-        
-        if (error.name === 'TokenExpiredError') {
-            return res.status(401).json({ 
-                message: 'Token expiré' 
-            });
-        } else if (error.name === 'JsonWebTokenError') {
-            return res.status(401).json({ 
-                message: 'Token invalide' 
-            });
-        } else {
-            return res.status(500).json({ 
-                message: 'Erreur de vérification du token' 
-            });
-        }
+        console.error('Optional auth middleware error:', error);
+        next();
     }
 };
 
-// Export the middleware function
-module.exports = auth;
+module.exports = {
+    auth,
+    admin,
+    optionalAuth
+};

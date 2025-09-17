@@ -10,7 +10,7 @@ const app = express();
 // CORS configuration
 app.use(cors({
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token']
 }));
 
@@ -104,7 +104,8 @@ const OrderSchema = new mongoose.Schema({
         ville: String,
         wilaya: String,
         codePostal: String,
-        telephone: String
+        telephone: String,
+        email: String
     },
     notes: String,
     dateCommande: { type: Date, default: Date.now },
@@ -383,13 +384,22 @@ app.get('/api/products/categories/all', async (req, res) => {
     }
 });
 
-// Get Featured Products
+// Get Featured Products - FIXED
 app.get('/api/products/featured/all', async (req, res) => {
     try {
-        const products = await Product.find({ vedette: true, actif: true })
-            .sort({ dateAjout: -1 })
-            .limit(8);
+        console.log('⭐ Getting featured products');
+        
+        const products = await Product.find({ 
+            vedette: true, 
+            actif: { $ne: false } // Include products where actif is true or undefined
+        })
+        .sort({ dateAjout: -1 })
+        .limit(8);
+        
+        console.log(`✅ Found ${products.length} featured products`);
+        
         res.json({ products });
+        
     } catch (error) {
         console.error('❌ Featured products error:', error);
         res.status(500).json({ message: 'Erreur lors de la récupération des produits vedettes' });
@@ -406,6 +416,228 @@ app.get('/api/products/promotions/all', async (req, res) => {
     } catch (error) {
         console.error('❌ Promotion products error:', error);
         res.status(500).json({ message: 'Erreur lors de la récupération des promotions' });
+    }
+});
+
+// ADMIN PRODUCT ROUTES
+// Admin: Create Product
+app.post('/api/admin/products', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('➕ Creating new product:', req.body.nom);
+        
+        const productData = {
+            nom: req.body.nom,
+            description: req.body.description || '',
+            prix: parseFloat(req.body.prix) || 0,
+            prixPromo: req.body.prixPromo ? parseFloat(req.body.prixPromo) : undefined,
+            image: req.body.image || '',
+            images: req.body.images || [],
+            categorie: req.body.categorie || 'Autre',
+            sousCategorie: req.body.sousCategorie || '',
+            stock: parseInt(req.body.stock) || 0,
+            actif: req.body.actif !== false,
+            vedette: req.body.vedette === true,
+            promotion: req.body.promotion === true,
+            dateAjout: new Date(),
+            dateModification: new Date()
+        };
+        
+        const product = new Product(productData);
+        const savedProduct = await product.save();
+        
+        console.log('✅ Product created successfully:', savedProduct._id);
+        
+        res.status(201).json({
+            message: 'Produit créé avec succès',
+            product: savedProduct
+        });
+        
+    } catch (error) {
+        console.error('❌ Create product error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la création du produit',
+            error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+        });
+    }
+});
+
+// Admin: Update Product
+app.put('/api/admin/products/:id', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('📝 Updating product:', req.params.id);
+        
+        const updateData = {
+            ...req.body,
+            dateModification: new Date()
+        };
+        
+        // Convert numeric fields
+        if (updateData.prix) updateData.prix = parseFloat(updateData.prix);
+        if (updateData.prixPromo) updateData.prixPromo = parseFloat(updateData.prixPromo);
+        if (updateData.stock) updateData.stock = parseInt(updateData.stock);
+        
+        const product = await Product.findByIdAndUpdate(
+            req.params.id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+        
+        if (!product) {
+            return res.status(404).json({ message: 'Produit non trouvé' });
+        }
+        
+        console.log('✅ Product updated successfully:', product._id);
+        
+        res.json({
+            message: 'Produit mis à jour avec succès',
+            product: product
+        });
+        
+    } catch (error) {
+        console.error('❌ Update product error:', error);
+        res.status(500).json({ 
+            message: 'Erreur lors de la mise à jour du produit',
+            error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+        });
+    }
+});
+
+// Admin: Get All Products for Management
+app.get('/api/admin/products', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('📋 Getting all products for admin');
+        
+        const { page, limit, search, categorie } = req.query;
+        const query = {};
+        
+        if (search) {
+            query.$or = [
+                { nom: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+                { categorie: { $regex: search, $options: 'i' } }
+            ];
+        }
+        
+        if (categorie) query.categorie = categorie;
+        
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 50;
+        const skip = (pageNum - 1) * limitNum;
+        
+        const products = await Product.find(query)
+            .sort({ dateModification: -1 })
+            .skip(skip)
+            .limit(limitNum);
+            
+        const totalProducts = await Product.countDocuments(query);
+        
+        console.log(`✅ Found ${products.length} products for admin`);
+        
+        res.json({
+            products,
+            totalProducts,
+            currentPage: pageNum,
+            totalPages: Math.ceil(totalProducts / limitNum)
+        });
+        
+    } catch (error) {
+        console.error('❌ Get admin products error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des produits' });
+    }
+});
+
+// Admin: Delete/Deactivate Product
+app.delete('/api/admin/products/:id', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('🗑️ Deactivating product:', req.params.id);
+        
+        const product = await Product.findByIdAndUpdate(
+            req.params.id,
+            { actif: false, dateModification: new Date() },
+            { new: true }
+        );
+        
+        if (!product) {
+            return res.status(404).json({ message: 'Produit non trouvé' });
+        }
+        
+        console.log('✅ Product deactivated:', product._id);
+        
+        res.json({
+            message: 'Produit désactivé avec succès',
+            product: product
+        });
+        
+    } catch (error) {
+        console.error('❌ Delete product error:', error);
+        res.status(500).json({ message: 'Erreur lors de la suppression du produit' });
+    }
+});
+
+// Toggle Product Featured Status
+app.patch('/api/admin/products/:id/featured', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('⭐ Toggling featured status for product:', req.params.id);
+        
+        const { vedette } = req.body;
+        
+        const product = await Product.findByIdAndUpdate(
+            req.params.id,
+            { 
+                vedette: vedette === true,
+                dateModification: new Date()
+            },
+            { new: true }
+        );
+        
+        if (!product) {
+            return res.status(404).json({ message: 'Produit non trouvé' });
+        }
+        
+        console.log(`✅ Product ${product.vedette ? 'added to' : 'removed from'} featured`);
+        
+        res.json({
+            message: `Produit ${product.vedette ? 'ajouté aux' : 'retiré des'} coups de cœur`,
+            product: product
+        });
+        
+    } catch (error) {
+        console.error('❌ Toggle featured error:', error);
+        res.status(500).json({ message: 'Erreur lors de la mise à jour du statut vedette' });
+    }
+});
+
+// Get Products by Admin for Featured Management
+app.get('/api/admin/products/featured-management', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('⭐ Getting products for featured management');
+        
+        const { page, limit } = req.query;
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
+        
+        const products = await Product.find({ actif: { $ne: false } })
+            .sort({ vedette: -1, dateModification: -1 }) // Featured first, then by modification date
+            .skip(skip)
+            .limit(limitNum);
+            
+        const totalProducts = await Product.countDocuments({ actif: { $ne: false } });
+        const featuredCount = await Product.countDocuments({ vedette: true, actif: { $ne: false } });
+        
+        console.log(`✅ Found ${products.length} products for featured management (${featuredCount} featured)`);
+        
+        res.json({
+            products,
+            totalProducts,
+            featuredCount,
+            currentPage: pageNum,
+            totalPages: Math.ceil(totalProducts / limitNum)
+        });
+        
+    } catch (error) {
+        console.error('❌ Get featured management products error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des produits' });
     }
 });
 
@@ -470,7 +702,8 @@ app.post('/api/orders', async (req, res) => {
                 ville: req.body.adresseLivraison.ville || '',
                 wilaya: req.body.adresseLivraison.wilaya || '',
                 codePostal: req.body.adresseLivraison.codePostal || '',
-                telephone: req.body.adresseLivraison.telephone || ''
+                telephone: req.body.adresseLivraison.telephone || '',
+                email: req.body.adresseLivraison.email || ''
             },
             notes: req.body.notes || '',
             dateCommande: new Date(),
@@ -576,34 +809,58 @@ app.get('/api/orders/user/all', auth, async (req, res) => {
     }
 });
 
-// Get Order by ID
-app.get('/api/orders/:id', auth, async (req, res) => {
+// Get Order by ID - FIXED authentication
+app.get('/api/orders/:id', async (req, res) => {
     try {
-        const order = await Order.findById(req.params.id);
+        console.log('📋 Getting order by ID:', req.params.id);
+        
+        // Check authentication
+        let isAdmin = false;
+        let userId = null;
+        const token = req.header('x-auth-token');
+        
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+                const user = await User.findById(decoded.id);
+                if (user) {
+                    userId = user._id;
+                    isAdmin = user.role === 'admin';
+                }
+            } catch (tokenError) {
+                console.log('⚠️ Token validation failed');
+            }
+        }
+        
+        const order = await Order.findById(req.params.id).lean();
             
         if (!order) {
             return res.status(404).json({ message: 'Commande non trouvée' });
         }
         
-        // Check if user owns the order or is admin
-        if (order.utilisateur && order.utilisateur.toString() !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Accès refusé' });
+        // Check access rights - admin can see all orders, users can only see their own
+        if (!isAdmin) {
+            if (!order.utilisateur || order.utilisateur.toString() !== userId?.toString()) {
+                return res.status(403).json({ message: 'Accès refusé' });
+            }
         }
+        
+        console.log('✅ Order found and authorized');
         
         res.json(order);
         
     } catch (error) {
-        console.error('❌ Get order error:', error);
+        console.error('❌ Get order by ID error:', error);
         res.status(500).json({ message: 'Erreur lors de la récupération de la commande' });
     }
 });
 
-// Admin: Get All Orders - SIMPLIFIED
+// Admin: Get All Orders - FIXED to show proper order info
 app.get('/api/orders', async (req, res) => {
     try {
-        console.log('📋 Getting orders - SIMPLIFIED');
+        console.log('📋 Getting all orders for admin');
         
-        // Check if user is admin (optional authentication)
+        // Check admin authentication
         let isAdmin = false;
         const token = req.header('x-auth-token');
         if (token) {
@@ -614,7 +871,7 @@ app.get('/api/orders', async (req, res) => {
                     isAdmin = true;
                 }
             } catch (tokenError) {
-                console.log('⚠️ Token validation failed');
+                console.log('⚠️ Admin token validation failed');
             }
         }
         
@@ -631,18 +888,39 @@ app.get('/api/orders', async (req, res) => {
         const limitNum = parseInt(limit) || 20;
         const skip = (pageNum - 1) * limitNum;
         
+        // Get orders with proper formatting for admin display
         const orders = await Order.find(query)
             .sort({ dateCommande: -1 })
             .skip(skip)
             .limit(limitNum)
-            .lean(); // Use lean for better performance
+            .lean();
+        
+        // Format orders for admin display
+        const formattedOrders = orders.map(order => {
+            const clientName = order.adresseLivraison 
+                ? `${order.adresseLivraison.prenom || ''} ${order.adresseLivraison.nom || ''}`.trim()
+                : 'Client anonyme';
+                
+            const clientEmail = order.adresseLivraison?.email || 'Non renseigné';
+            const clientPhone = order.adresseLivraison?.telephone || 'Non renseigné';
+            
+            return {
+                ...order,
+                clientName,
+                clientEmail,
+                clientPhone,
+                formattedDate: new Date(order.dateCommande).toLocaleDateString('fr-FR'),
+                formattedTime: new Date(order.dateCommande).toLocaleTimeString('fr-FR'),
+                productCount: order.produits ? order.produits.length : 0
+            };
+        });
             
         const totalOrders = await Order.countDocuments(query);
         
-        console.log(`✅ Found ${orders.length} orders`);
+        console.log(`✅ Found ${formattedOrders.length} orders for admin`);
         
         res.json({
-            orders,
+            orders: formattedOrders,
             totalOrders,
             currentPage: pageNum,
             totalPages: Math.ceil(totalOrders / limitNum)
@@ -831,6 +1109,60 @@ app.get('/api/admin/dashboard', async (req, res) => {
     }
 });
 
+// Get All Users (Admin)
+app.get('/api/admin/users', auth, adminAuth, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+
+        const users = await User.find()
+            .select('-password')
+            .sort({ dateInscription: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const totalUsers = await User.countDocuments();
+
+        res.json({
+            users,
+            totalUsers,
+            currentPage: page,
+            totalPages: Math.ceil(totalUsers / limit)
+        });
+
+    } catch (error) {
+        console.error('❌ Get users error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des utilisateurs' });
+    }
+});
+
+// Update User Status (Admin)
+app.put('/api/admin/users/:id/status', auth, adminAuth, async (req, res) => {
+    try {
+        const { actif } = req.body;
+        
+        const user = await User.findByIdAndUpdate(
+            req.params.id,
+            { actif },
+            { new: true }
+        ).select('-password');
+
+        if (!user) {
+            return res.status(404).json({ message: 'Utilisateur non trouvé' });
+        }
+
+        res.json({
+            message: `Utilisateur ${actif ? 'activé' : 'désactivé'} avec succès`,
+            user
+        });
+
+    } catch (error) {
+        console.error('❌ Update user status error:', error);
+        res.status(500).json({ message: 'Erreur lors de la mise à jour' });
+    }
+});
+
 // Create Admin User Function
 async function createAdminUser() {
     try {
@@ -1003,4 +1335,5 @@ app.listen(PORT, () => {
     console.log(`🔐 Login: http://localhost:${PORT}/api/auth/login`);
     console.log(`🛍️ Products: http://localhost:${PORT}/api/products`);
     console.log(`📦 Orders: http://localhost:${PORT}/api/orders`);
+    console.log(`⚡ Admin: http://localhost:${PORT}/api/admin`);
 });

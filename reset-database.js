@@ -1,238 +1,372 @@
-// reset-database.js - Script to reset users with proper password hashes
-require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+require('dotenv').config();
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(async () => {
-    console.log('✅ Connecté à MongoDB');
-    
-    // Import models
-    const User = require('./models/User');
-    const Settings = require('./models/Settings');
-    const Product = require('./models/Product');
-    
+// Import models
+const User = require('./models/User');
+const Product = require('./models/Product');
+const Order = require('./models/Order');
+const Settings = require('./models/Settings');
+
+// Demo products data
+const demoProducts = [
+    {
+        nom: "Vitamine D3 2000 UI",
+        description: "Complément alimentaire vitamine D3 pour renforcer votre système immunitaire et maintenir des os solides",
+        prix: 2500,
+        prixOriginal: 3000,
+        categorie: "Vitalité",
+        marque: "VitalHealth",
+        stock: 50,
+        enPromotion: true,
+        enVedette: true,
+        pourcentagePromotion: 17,
+        ingredients: "Vitamine D3 (cholécalciférol), huile de tournesol",
+        modeEmploi: "1 gélule par jour avec un repas",
+        precautions: "Ne pas dépasser la dose recommandée",
+        image: "https://via.placeholder.com/300x300/10b981/ffffff?text=Vit+D3",
+        actif: true
+    },
+    {
+        nom: "Shampooing Anti-Chute",
+        description: "Shampooing fortifiant spécialement formulé pour réduire la chute des cheveux et stimuler la repousse",
+        prix: 1800,
+        categorie: "Cheveux",
+        marque: "HairCare",
+        stock: 30,
+        enVedette: true,
+        ingredients: "Kératine, biotine, huiles essentielles",
+        modeEmploi: "Appliquer sur cheveux mouillés, masser, rincer",
+        precautions: "Éviter le contact avec les yeux",
+        image: "https://via.placeholder.com/300x300/f59e0b/ffffff?text=Shampoing",
+        actif: true
+    },
+    {
+        nom: "Crème Hydratante Visage SPF 30",
+        description: "Crème hydratante quotidienne avec protection solaire pour tous types de peaux",
+        prix: 3200,
+        categorie: "Visage",
+        marque: "SkinCare",
+        stock: 25,
+        enVedette: true,
+        ingredients: "Acide hyaluronique, vitamine E, filtres UV",
+        modeEmploi: "Appliquer matin et soir sur visage propre",
+        precautions: "Test d'allergie recommandé",
+        image: "https://via.placeholder.com/300x300/ec4899/ffffff?text=Crème",
+        actif: true
+    },
+    {
+        nom: "Gel Intime Apaisant",
+        description: "Gel doux pour l'hygiène intime féminine, formule hypoallergénique",
+        prix: 1500,
+        categorie: "Intime",
+        marque: "FemCare",
+        stock: 40,
+        ingredients: "Aloe vera, camomille, acide lactique",
+        modeEmploi: "Usage externe uniquement",
+        precautions: "Arrêter en cas d'irritation",
+        image: "https://via.placeholder.com/300x300/ef4444/ffffff?text=Gel",
+        actif: true
+    },
+    {
+        nom: "Crème Solaire Enfants SPF 50+",
+        description: "Protection solaire très haute pour la peau délicate des enfants",
+        prix: 2800,
+        categorie: "Solaire",
+        marque: "SunProtect",
+        stock: 35,
+        enPromotion: true,
+        prixOriginal: 3200,
+        pourcentagePromotion: 12,
+        ingredients: "Filtres minéraux, oxyde de zinc",
+        modeEmploi: "Appliquer généreusement 30 min avant exposition",
+        precautions: "Renouveler toutes les 2 heures",
+        image: "https://via.placeholder.com/300x300/f97316/ffffff?text=Solaire",
+        actif: true
+    },
+    {
+        nom: "Lait Corporel Bébé",
+        description: "Lait hydratant doux pour la peau sensible des bébés",
+        prix: 1200,
+        categorie: "Bébé",
+        marque: "BabyCare",
+        stock: 45,
+        enVedette: true,
+        ingredients: "Huile d'amande douce, beurre de karité",
+        modeEmploi: "Masser délicatement sur peau propre",
+        precautions: "Produit testé dermatologiquement",
+        image: "https://via.placeholder.com/300x300/06b6d4/ffffff?text=Bébé",
+        actif: true
+    },
+    {
+        nom: "Complément Prénatal",
+        description: "Vitamines et minéraux essentiels pour la femme enceinte et allaitante",
+        prix: 4500,
+        categorie: "Maman",
+        marque: "MamaCare",
+        stock: 20,
+        ingredients: "Acide folique, fer, calcium, oméga-3",
+        modeEmploi: "1 comprimé par jour pendant le repas",
+        precautions: "Consulter un médecin avant utilisation",
+        image: "https://via.placeholder.com/300x300/d946ef/ffffff?text=Prénatal",
+        actif: true
+    },
+    {
+        nom: "Brûleur de Graisse Naturel",
+        description: "Complément minceur à base d'extraits végétaux pour soutenir la perte de poids",
+        prix: 3800,
+        categorie: "Minceur",
+        marque: "SlimFit",
+        stock: 15,
+        ingredients: "Thé vert, guarana, chrome",
+        modeEmploi: "2 gélules avant le petit-déjeuner",
+        precautions: "Déconseillé aux femmes enceintes",
+        image: "https://via.placeholder.com/300x300/8b5cf6/ffffff?text=Minceur",
+        actif: true
+    },
+    {
+        nom: "Gel Douche Homme Sport",
+        description: "Gel douche rafraîchissant spécialement conçu pour les hommes actifs",
+        prix: 1600,
+        categorie: "Homme",
+        marque: "MenCare",
+        stock: 30,
+        ingredients: "Menthol, aloe vera, vitamines",
+        modeEmploi: "Appliquer sur peau mouillée et rincer",
+        precautions: "Usage externe uniquement",
+        image: "https://via.placeholder.com/300x300/3b82f6/ffffff?text=Sport",
+        actif: true
+    },
+    {
+        nom: "Sérum Anti-Âge",
+        description: "Sérum concentré en actifs anti-âge pour réduire les rides et raffermir la peau",
+        prix: 5500,
+        categorie: "Soins",
+        marque: "AntiAge",
+        stock: 12,
+        enVedette: true,
+        ingredients: "Rétinol, peptides, vitamine C",
+        modeEmploi: "Appliquer le soir sur peau propre",
+        precautions: "Utiliser une protection solaire le jour",
+        image: "https://via.placeholder.com/300x300/22c55e/ffffff?text=Sérum",
+        actif: true
+    },
+    {
+        nom: "Dentifrice Blanchissant",
+        description: "Dentifrice au fluor pour un blanchiment en douceur et une protection complète",
+        prix: 950,
+        categorie: "Dentaire",
+        marque: "SmileCare",
+        stock: 60,
+        ingredients: "Fluor, bicarbonate, huile de menthe",
+        modeEmploi: "Brosser 3 fois par jour après les repas",
+        precautions: "Ne pas avaler",
+        image: "https://via.placeholder.com/300x300/6366f1/ffffff?text=Dent",
+        actif: true
+    },
+    {
+        nom: "Protéine Whey Vanille",
+        description: "Poudre protéinée haute qualité pour la récupération musculaire",
+        prix: 7200,
+        categorie: "Sport",
+        marque: "FitProtein",
+        stock: 18,
+        ingredients: "Protéine de lactosérum, arôme vanille",
+        modeEmploi: "1 shaker après l'entraînement",
+        precautions: "Boire suffisamment d'eau",
+        image: "https://via.placeholder.com/300x300/f43f5e/ffffff?text=Protéine",
+        actif: true
+    }
+];
+
+// Connect to database
+async function connectDB() {
     try {
-        console.log('🔄 Début de la réinitialisation...');
+        await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/parapharmacie', {
+            useNewUrlParser: true,
+            useUnifiedTopology: true
+        });
+        console.log('✅ MongoDB connected');
+    } catch (error) {
+        console.error('❌ MongoDB connection failed:', error);
+        process.exit(1);
+    }
+}
+
+// Clear all collections
+async function clearDatabase() {
+    try {
+        console.log('🧹 Clearing database...');
         
-        // Delete all existing users to start fresh
         await User.deleteMany({});
-        console.log('🗑️ Tous les utilisateurs existants supprimés');
+        await Product.deleteMany({});
+        await Order.deleteMany({});
+        await Settings.deleteMany({});
         
-        // Create admin user with proper password hash
-        const salt = await bcrypt.genSalt(10);
+        console.log('✅ Database cleared');
+    } catch (error) {
+        console.error('❌ Error clearing database:', error);
+        throw error;
+    }
+}
+
+// Create admin user
+async function createAdminUser() {
+    try {
+        console.log('👤 Creating admin user...');
+        
+        const salt = await bcrypt.genSalt(12);
         const hashedPassword = await bcrypt.hash('anesaya75', salt);
         
-        console.log('🔐 Mot de passe hashé créé');
-        
-        const adminUser = new User({
+        const admin = new User({
             nom: 'Gaher',
-            prenom: 'Pharmacie',
+            prenom: 'Parapharmacie',
             email: 'pharmaciegaher@gmail.com',
+            password: hashedPassword,
             telephone: '+213123456789',
             adresse: 'Tipaza, Algérie',
             wilaya: 'Tipaza',
-            password: hashedPassword,
-            role: 'admin'
+            role: 'admin',
+            actif: true,
+            emailVerifie: true,
+            telephoneVerifie: true,
+            dateInscription: new Date()
         });
         
-        await adminUser.save();
-        console.log('✅ Compte admin créé avec mot de passe hashé');
-        console.log('📧 Email: pharmaciegaher@gmail.com');
-        console.log('🔑 Mot de passe: anesaya75');
-        console.log('👑 Rôle: admin');
+        await admin.save();
+        console.log('✅ Admin user created');
         
-        // Verify the admin user was created correctly
-        const verifyAdmin = await User.findOne({ email: 'pharmaciegaher@gmail.com' }).select('+password');
-        if (verifyAdmin && verifyAdmin.password) {
-            console.log('✅ Vérification: Admin user créé avec password hash');
-            console.log('🔍 Password hash length:', verifyAdmin.password.length);
-            console.log('🔍 Role:', verifyAdmin.role);
-        } else {
-            console.log('❌ ERREUR: Admin user créé mais sans password!');
-        }
+        return admin;
+    } catch (error) {
+        console.error('❌ Error creating admin user:', error);
+        throw error;
+    }
+}
+
+// Create demo products
+async function createDemoProducts() {
+    try {
+        console.log('📦 Creating demo products...');
         
-        // Create a test user account
-        const testUserPassword = await bcrypt.hash('test123', salt);
-        const testUser = new User({
-            nom: 'Test',
-            prenom: 'User',
-            email: 'test@example.com',
-            telephone: '+213987654321',
-            adresse: 'Test Address, Algérie',
-            wilaya: 'Alger',
-            password: testUserPassword,
-            role: 'user'
+        const products = demoProducts.map(productData => ({
+            ...productData,
+            _id: new mongoose.Types.ObjectId(),
+            dateAjout: new Date()
+        }));
+        
+        await Product.insertMany(products);
+        console.log(`✅ Created ${products.length} demo products`);
+        
+        return products;
+    } catch (error) {
+        console.error('❌ Error creating demo products:', error);
+        throw error;
+    }
+}
+
+// Initialize settings
+async function initializeSettings() {
+    try {
+        console.log('⚙️ Initializing settings...');
+        
+        // This will create default settings
+        await Settings.getSettings();
+        
+        // Initialize default wilayas
+        await Settings.initializeDefaultWilayas();
+        
+        console.log('✅ Settings initialized');
+    } catch (error) {
+        console.error('❌ Error initializing settings:', error);
+        throw error;
+    }
+}
+
+// Create demo order
+async function createDemoOrder(admin, products) {
+    try {
+        console.log('📝 Creating demo order...');
+        
+        const selectedProducts = products.slice(0, 3);
+        const articles = selectedProducts.map(product => ({
+            productId: product._id.toString(),
+            nom: product.nom,
+            prix: product.prix,
+            quantite: Math.floor(Math.random() * 3) + 1,
+            image: product.image
+        }));
+        
+        const sousTotal = articles.reduce((total, article) => total + (article.prix * article.quantite), 0);
+        const fraisLivraison = 400;
+        const total = sousTotal + fraisLivraison;
+        
+        const order = new Order({
+            numeroCommande: `CMD${Date.now()}${Math.floor(Math.random() * 1000)}`,
+            client: {
+                userId: admin._id,
+                prenom: admin.prenom,
+                nom: admin.nom,
+                email: admin.email,
+                telephone: admin.telephone,
+                adresse: admin.adresse,
+                wilaya: admin.wilaya
+            },
+            articles,
+            sousTotal,
+            fraisLivraison,
+            total,
+            statut: 'en-attente',
+            modePaiement: 'Paiement à la livraison',
+            commentaires: 'Commande de démonstration',
+            dateCommande: new Date()
         });
         
-        await testUser.save();
-        console.log('✅ Compte test créé');
-        console.log('📧 Email: test@example.com');
-        console.log('🔑 Mot de passe: test123');
+        await order.save();
+        console.log('✅ Demo order created');
         
-        // Create default settings
-        await Settings.deleteMany({});
-        const defaultSettings = new Settings({
-            fraisLivraison: 300,
-            livraisonGratuite: 5000,
-            couleurPrimaire: '#10b981',
-            couleurSecondaire: '#059669',
-            couleurAccent: '#34d399',
-            nomSite: 'VitalCare - Pharmacie Gaher',
-            slogan: 'Votre bien-être, notre mission naturelle',
-            email: 'pharmaciegaher@gmail.com',
-            telephone: '+213123456789',
-            adresse: 'Tipaza, Algérie',
-            instagram: 'https://www.instagram.com/pharmaciegaher/',
-            facebook: 'https://www.facebook.com/pharmaciegaher/?locale=mg_MG',
-            heuresOuverture: 'Lun-Sam: 8h-20h, Dim: 9h-18h',
-            messageAccueil: 'Bienvenue chez VitalCare - Votre partenaire santé de confiance'
-        });
+        return order;
+    } catch (error) {
+        console.error('❌ Error creating demo order:', error);
+        throw error;
+    }
+}
+
+// Main reset function
+async function resetDatabase() {
+    try {
+        console.log('🚀 Starting database reset...');
         
-        await defaultSettings.save();
-        console.log('✅ Paramètres par défaut créés');
+        await connectDB();
+        await clearDatabase();
         
-        // Create example products if none exist
-        const productCount = await Product.countDocuments();
-        if (productCount === 0) {
-            console.log('📦 Création des produits d\'exemple...');
-            await createExampleProducts();
-        }
+        const admin = await createAdminUser();
+        const products = await createDemoProducts();
+        await initializeSettings();
+        await createDemoOrder(admin, products);
         
-        console.log('\n🎉 Base de données réinitialisée avec succès!');
-        console.log('\n📋 RÉSUMÉ:');
-        console.log('   - Admin: pharmaciegaher@gmail.com / anesaya75');
-        console.log('   - Test User: test@example.com / test123');
-        console.log('   - Paramètres par défaut créés');
-        console.log('   - Produits d\'exemple créés');
+        console.log('✅ Database reset completed successfully!');
+        console.log('📊 Summary:');
+        console.log(`   - Admin user: ${admin.email}`);
+        console.log(`   - Products: ${products.length}`);
+        console.log(`   - Settings initialized`);
+        console.log(`   - Demo order created`);
+        console.log('');
+        console.log('🔑 Admin credentials:');
+        console.log('   Email: pharmaciegaher@gmail.com');
+        console.log('   Password: anesaya75');
         
     } catch (error) {
-        console.error('❌ Erreur lors de la réinitialisation:', error);
+        console.error('❌ Database reset failed:', error);
+    } finally {
+        await mongoose.disconnect();
+        console.log('📝 Database connection closed');
+        process.exit(0);
     }
-    
-    mongoose.disconnect();
-    console.log('👋 Déconnecté de MongoDB');
-})
-.catch(err => {
-    console.error('❌ Erreur de connexion MongoDB:', err);
-});
-
-// Function to create example products
-async function createExampleProducts() {
-    const Product = require('./models/Product');
-    
-    const exampleProducts = [
-        {
-            nom: "Multivitamines VitalForce",
-            description: "Complexe de vitamines et minéraux pour booster votre énergie quotidienne. Formule complète avec vitamines A, B, C, D, E et minéraux essentiels.",
-            prix: 2800,
-            prixOriginal: 3200,
-            categorie: "Vitalité",
-            marque: "VitalCare",
-            stock: 50,
-            enPromotion: true,
-            pourcentagePromotion: 12,
-            enVedette: true,
-            image: "/images/multivitamines.jpg",
-            ingredients: "Vitamines A, B1, B2, B6, B12, C, D3, E, Fer, Zinc, Magnésium",
-            modeEmploi: "1 comprimé par jour avec un grand verre d'eau, de préférence le matin",
-            precautions: "Ne pas dépasser la dose recommandée. Tenir hors de portée des enfants."
-        },
-        {
-            nom: "Shampoing Anti-Chute L'Oréal",
-            description: "Shampoing fortifiant pour cheveux fragiles et qui tombent. Formule enrichie en aminexil et vitamines B3, B5, B6.",
-            prix: 2500,
-            prixOriginal: 3000,
-            categorie: "Cheveux",
-            marque: "L'Oréal",
-            stock: 25,
-            enPromotion: true,
-            pourcentagePromotion: 17,
-            enVedette: true,
-            image: "/images/shampoing-loreal.jpg",
-            ingredients: "Aqua, Sodium Laureth Sulfate, Aminexil, Vitamines B3, B5, B6",
-            modeEmploi: "Appliquer sur cheveux mouillés, masser délicatement, rincer abondamment",
-            precautions: "Éviter le contact avec les yeux"
-        },
-        {
-            nom: "Crème Hydratante Visage Avène",
-            description: "Crème hydratante apaisante pour peaux sensibles et sèches. Eau thermale d'Avène.",
-            prix: 3200,
-            categorie: "Visage",
-            marque: "Avène",
-            stock: 30,
-            enVedette: true,
-            image: "/images/creme-avene.jpg",
-            ingredients: "Eau thermale d'Avène, Glycérine, Beurre de Karité",
-            modeEmploi: "Appliquer matin et soir sur visage propre",
-            precautions: "Usage externe uniquement"
-        },
-        {
-            nom: "Lait Nettoyant Bébé Mustela",
-            description: "Lait nettoyant doux pour la peau délicate de bébé. Sans paraben, hypoallergénique.",
-            prix: 1800,
-            categorie: "Bébé",
-            marque: "Mustela",
-            stock: 20,
-            image: "/images/lait-mustela.jpg",
-            ingredients: "Aqua, Coco-Glucoside, Glycérine végétale",
-            modeEmploi: "Appliquer sur peau humide, nettoyer en douceur, rincer",
-            precautions: "Testé sous contrôle dermatologique et pédiatrique"
-        },
-        {
-            nom: "Crème Solaire SPF 50+ La Roche Posay",
-            description: "Protection solaire très haute pour peaux sensibles. Résistante à l'eau.",
-            prix: 4500,
-            categorie: "Solaire",
-            marque: "La Roche Posay",
-            stock: 15,
-            enVedette: true,
-            image: "/images/creme-solaire-lrp.jpg",
-            ingredients: "Mexoryl SX, Mexoryl XL, Eau thermale La Roche-Posay",
-            modeEmploi: "Appliquer généreusement avant exposition. Renouveler fréquemment",
-            precautions: "Éviter exposition prolongée même avec protection"
-        },
-        {
-            nom: "Dentifrice Sensodyne Protection Complète",
-            description: "Dentifrice pour dents sensibles. Protection 24h contre la sensibilité dentaire.",
-            prix: 950,
-            categorie: "Dentaire",
-            marque: "Sensodyne",
-            stock: 40,
-            image: "/images/dentifrice-sensodyne.jpg",
-            modeEmploi: "Brosser les dents 2 fois par jour",
-            precautions: "Ne pas avaler. Tenir hors de portée des enfants"
-        },
-        {
-            nom: "Gel Nettoyant Intime Saforelle",
-            description: "Gel doux pour l'hygiène intime quotidienne. pH physiologique, sans savon.",
-            prix: 1600,
-            categorie: "Intime",
-            marque: "Saforelle",
-            stock: 22,
-            image: "/images/gel-saforelle.jpg",
-            ingredients: "Bardane, pH 5.2, Sans savon",
-            modeEmploi: "Utiliser quotidiennement avec de l'eau tiède",
-            precautions: "Usage externe uniquement"
-        },
-        {
-            nom: "Gel Douche Homme Vichy",
-            description: "Gel douche hydratant pour homme. Eau thermale de Vichy, parfum frais.",
-            prix: 1400,
-            categorie: "Homme",
-            marque: "Vichy",
-            stock: 18,
-            image: "/images/gel-vichy-homme.jpg",
-            ingredients: "Eau thermale de Vichy, Glycérine",
-            modeEmploi: "Appliquer sur peau mouillée, faire mousser, rincer",
-            precautions: "Éviter le contact avec les yeux"
-        }
-    ];
-
-    await Product.insertMany(exampleProducts);
-    console.log('✅ Produits d\'exemple créés:', exampleProducts.length);
 }
+
+// Run the reset
+if (require.main === module) {
+    resetDatabase();
+}
+
+module.exports = { resetDatabase };

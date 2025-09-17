@@ -1,88 +1,95 @@
 const express = require('express');
-const auth = require('../middleware/auth');
+const Settings = require('../models/Settings');
+const { auth, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Middleware to check if user is admin
-const adminAuth = (req, res, next) => {
-    if (req.user && req.user.role !== 'admin') {
-        return res.status(403).json({
-            message: 'Accès administrateur requis'
-        });
-    }
-    next();
-};
-
-// Default settings
-const defaultSettings = {
-    siteName: 'Shifa - Parapharmacie',
-    siteDescription: 'Votre parapharmacie de confiance à Tipaza',
-    contactEmail: 'pharmaciegaher@gmail.com',
-    contactPhone: '+213 123 456 789',
-    address: 'Tipaza, Algérie',
-    currency: 'DA',
-    language: 'fr',
-    timezone: 'Africa/Algiers',
-    freeShippingThreshold: 5000,
-    defaultShippingCost: 300,
-    taxRate: 0,
-    enableRegistration: true,
-    enableReviews: true,
-    enableNewsletter: true,
-    enableSocialLogin: false,
-    maintenanceMode: false,
-    theme: {
-        primaryColor: '#10b981',
-        secondaryColor: '#059669',
-        accentColor: '#34d399'
-    },
-    seo: {
-        metaTitle: 'Shifa - Parapharmacie Tipaza',
-        metaDescription: 'Découvrez notre large gamme de produits de parapharmacie à Tipaza. Livraison rapide dans toute l\'Algérie.',
-        metaKeywords: 'parapharmacie, tipaza, algérie, santé, beauté, produits naturels'
-    },
-    social: {
-        facebook: 'https://www.facebook.com/pharmaciegaher/',
-        instagram: 'https://www.instagram.com/pharmaciegaher/',
-        twitter: '',
-        linkedin: ''
-    }
-};
-
 // @route   GET /api/settings
 // @desc    Get all settings
-// @access  Private/Admin
-router.get('/', auth, adminAuth, async (req, res) => {
+// @access  Public (for basic settings) / Private/Admin (for all settings)
+router.get('/', async (req, res) => {
     try {
-        console.log('⚙️ Loading application settings...');
+        console.log('⚙️ Getting settings');
         
-        let settings = defaultSettings;
+        const settings = await Settings.getSettings();
         
-        try {
-            const Settings = require('../models/Settings');
-            const savedSettings = await Settings.findOne({});
+        // If not admin, only return public settings
+        if (!req.user || req.user.role !== 'admin') {
+            const publicSettings = {
+                siteName: settings.siteName,
+                siteDescription: settings.siteDescription,
+                contact: settings.contact,
+                shipping: {
+                    fraisLivraisonDefaut: settings.shipping.fraisLivraisonDefaut,
+                    livraisonGratuiteSeuil: settings.shipping.livraisonGratuiteSeuil,
+                    delaiLivraisonMin: settings.shipping.delaiLivraisonMin,
+                    delaiLivraisonMax: settings.shipping.delaiLivraisonMax,
+                    wilayasDisponibles: settings.shipping.wilayasDisponibles
+                },
+                payment: {
+                    modesDisponibles: settings.payment.modesDisponibles.filter(mode => mode.actif)
+                },
+                business: {
+                    devise: settings.business.devise,
+                    langue: settings.business.langue
+                },
+                maintenance: settings.maintenance,
+                features: settings.features,
+                theme: settings.theme
+            };
             
-            if (savedSettings) {
-                settings = { ...defaultSettings, ...savedSettings.toObject() };
-                delete settings._id;
-                delete settings.__v;
-            }
-            
-        } catch (modelError) {
-            console.log('⚠️ Settings model not available, using defaults');
+            return res.json(publicSettings);
         }
-
-        console.log('✅ Settings loaded successfully');
         
-        res.json({
-            message: 'Paramètres récupérés avec succès',
-            settings
-        });
-
+        // Admin gets all settings
+        res.json(settings);
+        
     } catch (error) {
-        console.error('❌ Settings fetch error:', error);
+        console.error('❌ Settings retrieval error:', error);
         res.status(500).json({
             message: 'Erreur lors de la récupération des paramètres'
+        });
+    }
+});
+
+// @route   GET /api/settings/public
+// @desc    Get public settings only
+// @access  Public
+router.get('/public', async (req, res) => {
+    try {
+        const settings = await Settings.getSettings();
+        
+        const publicSettings = {
+            siteName: settings.siteName,
+            siteDescription: settings.siteDescription,
+            contact: {
+                email: settings.contact.email,
+                telephone: settings.contact.telephone,
+                adresse: settings.contact.adresse,
+                horaires: settings.contact.horaires
+            },
+            shipping: {
+                fraisLivraisonDefaut: settings.shipping.fraisLivraisonDefaut,
+                livraisonGratuiteSeuil: settings.shipping.livraisonGratuiteSeuil,
+                wilayasDisponibles: settings.shipping.wilayasDisponibles
+            },
+            payment: {
+                modesDisponibles: settings.payment.modesDisponibles.filter(mode => mode.actif)
+            },
+            business: {
+                devise: settings.business.devise
+            },
+            socialMedia: settings.socialMedia,
+            features: settings.features,
+            theme: settings.theme
+        };
+        
+        res.json(publicSettings);
+        
+    } catch (error) {
+        console.error('❌ Public settings error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des paramètres publics'
         });
     }
 });
@@ -90,53 +97,19 @@ router.get('/', auth, adminAuth, async (req, res) => {
 // @route   PUT /api/settings
 // @desc    Update settings
 // @access  Private/Admin
-router.put('/', auth, adminAuth, async (req, res) => {
+router.put('/', auth, requireAdmin, async (req, res) => {
     try {
-        console.log('⚙️ Updating application settings...');
+        console.log('⚙️ Admin updating settings');
         
-        const updatedSettings = req.body;
+        const updatedSettings = await Settings.updateSettings(req.body);
         
-        // Validate required fields
-        if (!updatedSettings.siteName) {
-            return res.status(400).json({
-                message: 'Le nom du site est requis'
-            });
-        }
+        console.log('✅ Settings updated successfully');
         
-        try {
-            const Settings = require('../models/Settings');
-            
-            let settings = await Settings.findOne({});
-            
-            if (settings) {
-                Object.assign(settings, updatedSettings);
-            } else {
-                settings = new Settings(updatedSettings);
-            }
-            
-            await settings.save();
-            
-            const response = { ...defaultSettings, ...settings.toObject() };
-            delete response._id;
-            delete response.__v;
-            
-            console.log('✅ Settings updated successfully');
-            
-            res.json({
-                message: 'Paramètres mis à jour avec succès',
-                settings: response
-            });
-            
-        } catch (modelError) {
-            console.log('⚠️ Settings model not available, saving to memory only');
-            
-            // In a real application without database, you might save to file
-            res.json({
-                message: 'Paramètres mis à jour (en mémoire uniquement)',
-                settings: { ...defaultSettings, ...updatedSettings }
-            });
-        }
-
+        res.json({
+            message: 'Paramètres mis à jour avec succès',
+            settings: updatedSettings
+        });
+        
     } catch (error) {
         console.error('❌ Settings update error:', error);
         
@@ -153,91 +126,271 @@ router.put('/', auth, adminAuth, async (req, res) => {
     }
 });
 
-// @route   GET /api/settings/public
-// @desc    Get public settings (no auth required)
-// @access  Public
-router.get('/public', async (req, res) => {
+// @route   GET /api/settings/:section
+// @desc    Get specific settings section
+// @access  Private/Admin
+router.get('/:section', auth, requireAdmin, async (req, res) => {
     try {
-        console.log('🌐 Loading public settings...');
+        const settings = await Settings.getSettings();
+        const section = req.params.section;
         
-        let settings = defaultSettings;
-        
-        try {
-            const Settings = require('../models/Settings');
-            const savedSettings = await Settings.findOne({});
-            
-            if (savedSettings) {
-                settings = { ...defaultSettings, ...savedSettings.toObject() };
-            }
-            
-        } catch (modelError) {
-            console.log('⚠️ Settings model not available, using defaults');
+        if (!settings[section]) {
+            return res.status(404).json({
+                message: 'Section de paramètres non trouvée'
+            });
         }
-
-        // Filter to only public settings
-        const publicSettings = {
-            siteName: settings.siteName,
-            siteDescription: settings.siteDescription,
-            currency: settings.currency,
-            language: settings.language,
-            freeShippingThreshold: settings.freeShippingThreshold,
-            defaultShippingCost: settings.defaultShippingCost,
-            enableRegistration: settings.enableRegistration,
-            enableReviews: settings.enableReviews,
-            enableNewsletter: settings.enableNewsletter,
-            maintenanceMode: settings.maintenanceMode,
-            theme: settings.theme,
-            seo: settings.seo,
-            social: settings.social
-        };
-
+        
         res.json({
-            message: 'Paramètres publics récupérés',
-            settings: publicSettings
+            [section]: settings[section]
         });
-
+        
     } catch (error) {
-        console.error('❌ Public settings fetch error:', error);
+        console.error('❌ Settings section error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la récupération des paramètres publics'
+            message: 'Erreur lors de la récupération de la section'
         });
     }
 });
 
-// @route   POST /api/settings/reset
-// @desc    Reset settings to default
+// @route   PUT /api/settings/:section
+// @desc    Update specific settings section
 // @access  Private/Admin
-router.post('/reset', auth, adminAuth, async (req, res) => {
+router.put('/:section', auth, requireAdmin, async (req, res) => {
     try {
-        console.log('🔄 Resetting settings to default...');
+        const section = req.params.section;
+        const updateData = { [section]: req.body };
         
-        try {
-            const Settings = require('../models/Settings');
-            await Settings.deleteMany({});
-            
-            const newSettings = new Settings(defaultSettings);
-            await newSettings.save();
-            
-            console.log('✅ Settings reset to default successfully');
-            
-            res.json({
-                message: 'Paramètres réinitialisés aux valeurs par défaut',
-                settings: defaultSettings
-            });
-            
-        } catch (modelError) {
-            console.log('⚠️ Settings model not available, using memory only');
-            
-            res.json({
-                message: 'Paramètres réinitialisés (en mémoire)',
-                settings: defaultSettings
+        const updatedSettings = await Settings.updateSettings(updateData);
+        
+        res.json({
+            message: `Section ${section} mise à jour avec succès`,
+            [section]: updatedSettings[section]
+        });
+        
+    } catch (error) {
+        console.error('❌ Settings section update error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de la section'
+        });
+    }
+});
+
+// @route   GET /api/settings/shipping/wilayas
+// @desc    Get available wilayas for shipping
+// @access  Public
+router.get('/shipping/wilayas', async (req, res) => {
+    try {
+        const settings = await Settings.getSettings();
+        
+        res.json({
+            wilayas: settings.shipping.wilayasDisponibles || [],
+            fraisLivraisonDefaut: settings.shipping.fraisLivraisonDefaut,
+            livraisonGratuiteSeuil: settings.shipping.livraisonGratuiteSeuil
+        });
+        
+    } catch (error) {
+        console.error('❌ Wilayas retrieval error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des wilayas'
+        });
+    }
+});
+
+// @route   POST /api/settings/shipping/wilayas
+// @desc    Add or update wilaya shipping info
+// @access  Private/Admin
+router.post('/shipping/wilayas', auth, requireAdmin, async (req, res) => {
+    try {
+        const { nom, fraisLivraison, delaiLivraison } = req.body;
+        
+        if (!nom || fraisLivraison === undefined) {
+            return res.status(400).json({
+                message: 'Nom de wilaya et frais de livraison requis'
             });
         }
-
+        
+        const settings = await Settings.getSettings();
+        
+        // Check if wilaya already exists
+        const existingIndex = settings.shipping.wilayasDisponibles.findIndex(w => w.nom === nom);
+        
+        const wilayaData = {
+            nom,
+            fraisLivraison: parseFloat(fraisLivraison),
+            delaiLivraison: delaiLivraison || '2-7 jours'
+        };
+        
+        if (existingIndex > -1) {
+            // Update existing wilaya
+            settings.shipping.wilayasDisponibles[existingIndex] = wilayaData;
+        } else {
+            // Add new wilaya
+            settings.shipping.wilayasDisponibles.push(wilayaData);
+        }
+        
+        await settings.save();
+        
+        res.json({
+            message: 'Wilaya mise à jour avec succès',
+            wilaya: wilayaData
+        });
+        
     } catch (error) {
-        console.error('❌ Settings reset error:', error);
+        console.error('❌ Wilaya update error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la réinitialisation des paramètres'
+            message: 'Erreur lors de la mise à jour de la wilaya'
+        });
+    }
+});
+
+// @route   DELETE /api/settings/shipping/wilayas/:nom
+// @desc    Remove wilaya from shipping
+// @access  Private/Admin
+router.delete('/shipping/wilayas/:nom', auth, requireAdmin, async (req, res) => {
+    try {
+        const settings = await Settings.getSettings();
+        
+        settings.shipping.wilayasDisponibles = settings.shipping.wilayasDisponibles.filter(
+            w => w.nom !== req.params.nom
+        );
+        
+        await settings.save();
+        
+        res.json({
+            message: 'Wilaya supprimée avec succès'
+        });
+        
+    } catch (error) {
+        console.error('❌ Wilaya deletion error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la suppression de la wilaya'
+        });
+    }
+});
+
+// @route   POST /api/settings/payment/modes
+// @desc    Add or update payment mode
+// @access  Private/Admin
+router.post('/payment/modes', auth, requireAdmin, async (req, res) => {
+    try {
+        const { nom, actif, description } = req.body;
+        
+        if (!nom) {
+            return res.status(400).json({
+                message: 'Nom du mode de paiement requis'
+            });
+        }
+        
+        const settings = await Settings.getSettings();
+        
+        const existingIndex = settings.payment.modesDisponibles.findIndex(m => m.nom === nom);
+        
+        const modeData = {
+            nom,
+            actif: actif !== false,
+            description: description || ''
+        };
+        
+        if (existingIndex > -1) {
+            settings.payment.modesDisponibles[existingIndex] = modeData;
+        } else {
+            settings.payment.modesDisponibles.push(modeData);
+        }
+        
+        await settings.save();
+        
+        res.json({
+            message: 'Mode de paiement mis à jour avec succès',
+            mode: modeData
+        });
+        
+    } catch (error) {
+        console.error('❌ Payment mode update error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour du mode de paiement'
+        });
+    }
+});
+
+// @route   POST /api/settings/init
+// @desc    Initialize default settings
+// @access  Private/Admin
+router.post('/init', auth, requireAdmin, async (req, res) => {
+    try {
+        console.log('⚙️ Initializing default settings');
+        
+        // Initialize default wilayas
+        await Settings.initializeDefaultWilayas();
+        
+        // Initialize default payment modes if not exist
+        const settings = await Settings.getSettings();
+        
+        if (!settings.payment.modesDisponibles || settings.payment.modesDisponibles.length === 0) {
+            settings.payment.modesDisponibles = [
+                {
+                    nom: 'Paiement à la livraison',
+                    actif: true,
+                    description: 'Payez en espèces lors de la réception de votre commande'
+                },
+                {
+                    nom: 'Carte bancaire',
+                    actif: false,
+                    description: 'Paiement sécurisé par carte bancaire'
+                },
+                {
+                    nom: 'Virement bancaire',
+                    actif: false,
+                    description: 'Virement sur notre compte bancaire'
+                }
+            ];
+            
+            await settings.save();
+        }
+        
+        console.log('✅ Default settings initialized');
+        
+        res.json({
+            message: 'Paramètres par défaut initialisés avec succès',
+            settings
+        });
+        
+    } catch (error) {
+        console.error('❌ Settings initialization error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de l\'initialisation des paramètres'
+        });
+    }
+});
+
+// @route   POST /api/settings/maintenance
+// @desc    Toggle maintenance mode
+// @access  Private/Admin
+router.post('/maintenance', auth, requireAdmin, async (req, res) => {
+    try {
+        const { actif, message, dateDebut, dateFin } = req.body;
+        
+        const updateData = {
+            maintenance: {
+                actif: !!actif,
+                message: message || 'Site en maintenance. Nous revenons bientôt!',
+                dateDebut: dateDebut ? new Date(dateDebut) : (actif ? new Date() : null),
+                dateFin: dateFin ? new Date(dateFin) : null
+            }
+        };
+        
+        const settings = await Settings.updateSettings(updateData);
+        
+        console.log(`✅ Maintenance mode ${actif ? 'activated' : 'deactivated'}`);
+        
+        res.json({
+            message: `Mode maintenance ${actif ? 'activé' : 'désactivé'}`,
+            maintenance: settings.maintenance
+        });
+        
+    } catch (error) {
+        console.error('❌ Maintenance toggle error:', error);
+        res.status(500).json({
+            message: 'Erreur lors du changement du mode maintenance'
         });
     }
 });

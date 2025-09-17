@@ -1,13 +1,13 @@
 const express = require('express');
 const Order = require('../models/Order');
-const auth = require('../middleware/auth');
+const { auth, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
 // @route   POST /api/orders
 // @desc    Create new order
 // @access  Public
-router.post('/', async (req, res) => {
+router.post('/', optionalAuth, async (req, res) => {
     try {
         console.log('📦 New order creation:', req.body);
         

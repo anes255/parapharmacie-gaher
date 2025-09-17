@@ -54,6 +54,71 @@ UserSchema.methods.comparePassword = async function(password) {
 
 const User = mongoose.model('User', UserSchema);
 
+// Product Schema
+const ProductSchema = new mongoose.Schema({
+    nom: { type: String, required: true },
+    description: String,
+    prix: { type: Number, required: true },
+    prixPromo: Number,
+    image: String,
+    images: [String],
+    categorie: { type: String, required: true },
+    sousCategorie: String,
+    stock: { type: Number, default: 0 },
+    actif: { type: Boolean, default: true },
+    vedette: { type: Boolean, default: false },
+    promotion: { type: Boolean, default: false },
+    dateAjout: { type: Date, default: Date.now },
+    dateModification: { type: Date, default: Date.now }
+});
+
+const Product = mongoose.model('Product', ProductSchema);
+
+// Order Schema
+const OrderSchema = new mongoose.Schema({
+    utilisateur: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    produits: [{
+        produit: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Product',
+            required: true
+        },
+        nom: String,
+        prix: Number,
+        quantite: { type: Number, required: true },
+        total: Number
+    }],
+    montantTotal: { type: Number, required: true },
+    statut: {
+        type: String,
+        enum: ['en_attente', 'confirme', 'expdie', 'livre', 'annule'],
+        default: 'en_attente'
+    },
+    modeLivraison: {
+        type: String,
+        enum: ['domicile', 'point_relais', 'retrait'],
+        required: true
+    },
+    adresseLivraison: {
+        nom: String,
+        prenom: String,
+        adresse: String,
+        ville: String,
+        wilaya: String,
+        codePostal: String,
+        telephone: String
+    },
+    notes: String,
+    dateCommande: { type: Date, default: Date.now },
+    dateModification: { type: Date, default: Date.now }
+});
+
+const Order = mongoose.model('Order', OrderSchema);
+
 // Generate JWT
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024', {
@@ -279,12 +344,39 @@ app.get('/api/admin/dashboard', auth, adminAuth, async (req, res) => {
             dateInscription: { $gte: thirtyDaysAgo } 
         });
 
+        // Get product stats
+        const totalProducts = await Product.countDocuments({ actif: true });
+        const featuredProducts = await Product.countDocuments({ vedette: true, actif: true });
+        const promotionProducts = await Product.countDocuments({ promotion: true, actif: true });
+        const outOfStockProducts = await Product.countDocuments({ stock: 0, actif: true });
+        
+        // Get categories
+        const categories = await Product.distinct('categorie', { actif: true });
+
+        // Get order stats
+        const totalOrders = await Order.countDocuments();
+        const pendingOrders = await Order.countDocuments({ statut: 'en_attente' });
+        const completedOrders = await Order.countDocuments({ statut: 'livre' });
+        
+        // Calculate total revenue
+        const revenueResult = await Order.aggregate([
+            { $match: { statut: { $ne: 'annule' } } },
+            { $group: { _id: null, total: { $sum: '$montantTotal' } } }
+        ]);
+        const totalRevenue = revenueResult.length > 0 ? revenueResult[0].total : 0;
+
         // Get users by wilaya
         const usersByWilaya = await User.aggregate([
             { $group: { _id: '$wilaya', count: { $sum: 1 } } },
             { $sort: { count: -1 } },
             { $limit: 10 }
         ]);
+
+        // Get recent orders for activity
+        const recentOrders = await Order.find()
+            .populate('utilisateur', 'nom prenom')
+            .sort({ dateCommande: -1 })
+            .limit(5);
 
         const stats = {
             users: {
@@ -295,20 +387,27 @@ app.get('/api/admin/dashboard', auth, adminAuth, async (req, res) => {
                 recent: recentUsers
             },
             products: {
-                total: 0, // Will be added when product model is created
-                categories: 0,
-                featured: 0,
-                outOfStock: 0
+                total: totalProducts,
+                categories: categories.length,
+                featured: featuredProducts,
+                promotions: promotionProducts,
+                outOfStock: outOfStockProducts
             },
             orders: {
-                total: 0, // Will be added when order model is created
-                pending: 0,
-                completed: 0,
-                revenue: 0
+                total: totalOrders,
+                pending: pendingOrders,
+                completed: completedOrders,
+                revenue: totalRevenue
             },
             analytics: {
                 usersByWilaya: usersByWilaya,
-                recentActivity: []
+                recentActivity: recentOrders.map(order => ({
+                    id: order._id,
+                    user: `${order.utilisateur.prenom} ${order.utilisateur.nom}`,
+                    total: order.montantTotal,
+                    status: order.statut,
+                    date: order.dateCommande
+                }))
             }
         };
 
@@ -375,6 +474,279 @@ app.put('/api/admin/users/:id/status', auth, adminAuth, async (req, res) => {
     }
 });
 
+// PRODUCT ROUTES
+// Get All Products
+app.get('/api/products', async (req, res) => {
+    try {
+        console.log('🛍️ Getting products');
+        
+        const { categorie, promotion, vedette, limit, page } = req.query;
+        const query = { actif: true };
+        
+        if (categorie) query.categorie = categorie;
+        if (promotion === 'true') query.promotion = true;
+        if (vedette === 'true') query.vedette = true;
+        
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 50;
+        const skip = (pageNum - 1) * limitNum;
+        
+        const products = await Product.find(query)
+            .sort({ dateAjout: -1 })
+            .skip(skip)
+            .limit(limitNum);
+            
+        const totalProducts = await Product.countDocuments(query);
+        
+        console.log(`✅ Found ${products.length} products`);
+        
+        res.json({
+            products,
+            totalProducts,
+            currentPage: pageNum,
+            totalPages: Math.ceil(totalProducts / limitNum)
+        });
+        
+    } catch (error) {
+        console.error('❌ Products error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des produits' });
+    }
+});
+
+// Get Product by ID
+app.get('/api/products/:id', async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        if (!product) {
+            return res.status(404).json({ message: 'Produit non trouvé' });
+        }
+        res.json(product);
+    } catch (error) {
+        console.error('❌ Get product error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération du produit' });
+    }
+});
+
+// Get Categories
+app.get('/api/products/categories/all', async (req, res) => {
+    try {
+        const categories = await Product.distinct('categorie', { actif: true });
+        res.json({ categories });
+    } catch (error) {
+        console.error('❌ Categories error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des catégories' });
+    }
+});
+
+// Get Featured Products
+app.get('/api/products/featured/all', async (req, res) => {
+    try {
+        const products = await Product.find({ vedette: true, actif: true })
+            .sort({ dateAjout: -1 })
+            .limit(8);
+        res.json({ products });
+    } catch (error) {
+        console.error('❌ Featured products error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des produits vedettes' });
+    }
+});
+
+// Get Promotion Products
+app.get('/api/products/promotions/all', async (req, res) => {
+    try {
+        const products = await Product.find({ promotion: true, actif: true })
+            .sort({ dateAjout: -1 })
+            .limit(12);
+        res.json({ products });
+    } catch (error) {
+        console.error('❌ Promotion products error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des promotions' });
+    }
+});
+
+// Admin: Create Product
+app.post('/api/admin/products', auth, adminAuth, async (req, res) => {
+    try {
+        const product = new Product(req.body);
+        await product.save();
+        console.log('✅ Product created:', product.nom);
+        res.status(201).json({ message: 'Produit créé avec succès', product });
+    } catch (error) {
+        console.error('❌ Create product error:', error);
+        res.status(500).json({ message: 'Erreur lors de la création du produit' });
+    }
+});
+
+// Admin: Update Product
+app.put('/api/admin/products/:id', auth, adminAuth, async (req, res) => {
+    try {
+        const product = await Product.findByIdAndUpdate(
+            req.params.id,
+            { ...req.body, dateModification: new Date() },
+            { new: true }
+        );
+        if (!product) {
+            return res.status(404).json({ message: 'Produit non trouvé' });
+        }
+        res.json({ message: 'Produit mis à jour avec succès', product });
+    } catch (error) {
+        console.error('❌ Update product error:', error);
+        res.status(500).json({ message: 'Erreur lors de la mise à jour du produit' });
+    }
+});
+
+// Admin: Delete Product
+app.delete('/api/admin/products/:id', auth, adminAuth, async (req, res) => {
+    try {
+        const product = await Product.findByIdAndUpdate(
+            req.params.id,
+            { actif: false },
+            { new: true }
+        );
+        if (!product) {
+            return res.status(404).json({ message: 'Produit non trouvé' });
+        }
+        res.json({ message: 'Produit désactivé avec succès' });
+    } catch (error) {
+        console.error('❌ Delete product error:', error);
+        res.status(500).json({ message: 'Erreur lors de la suppression du produit' });
+    }
+});
+
+// ORDER ROUTES
+// Create Order
+app.post('/api/orders', auth, async (req, res) => {
+    try {
+        console.log('📦 Creating order for user:', req.user.id);
+        
+        const orderData = {
+            ...req.body,
+            utilisateur: req.user.id
+        };
+        
+        const order = new Order(orderData);
+        await order.save();
+        
+        // Populate the order with product and user details
+        await order.populate('utilisateur', 'nom prenom email telephone');
+        await order.populate('produits.produit', 'nom prix image');
+        
+        console.log('✅ Order created:', order._id);
+        
+        res.status(201).json({
+            message: 'Commande créée avec succès',
+            order
+        });
+        
+    } catch (error) {
+        console.error('❌ Create order error:', error);
+        res.status(500).json({ message: 'Erreur lors de la création de la commande' });
+    }
+});
+
+// Get User Orders
+app.get('/api/orders/user/all', auth, async (req, res) => {
+    try {
+        const orders = await Order.find({ utilisateur: req.user.id })
+            .populate('produits.produit', 'nom prix image')
+            .sort({ dateCommande: -1 });
+            
+        res.json({ orders });
+        
+    } catch (error) {
+        console.error('❌ Get user orders error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des commandes' });
+    }
+});
+
+// Get Order by ID
+app.get('/api/orders/:id', auth, async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.id)
+            .populate('utilisateur', 'nom prenom email telephone')
+            .populate('produits.produit', 'nom prix image');
+            
+        if (!order) {
+            return res.status(404).json({ message: 'Commande non trouvée' });
+        }
+        
+        // Check if user owns the order or is admin
+        if (order.utilisateur._id.toString() !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Accès refusé' });
+        }
+        
+        res.json(order);
+        
+    } catch (error) {
+        console.error('❌ Get order error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération de la commande' });
+    }
+});
+
+// Admin: Get All Orders
+app.get('/api/orders', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('📋 Admin getting all orders');
+        
+        const { statut, page, limit } = req.query;
+        const query = {};
+        
+        if (statut) query.statut = statut;
+        
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
+        
+        const orders = await Order.find(query)
+            .populate('utilisateur', 'nom prenom email telephone')
+            .populate('produits.produit', 'nom prix image')
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limitNum);
+            
+        const totalOrders = await Order.countDocuments(query);
+        
+        console.log(`✅ Found ${orders.length} orders`);
+        
+        res.json({
+            orders,
+            totalOrders,
+            currentPage: pageNum,
+            totalPages: Math.ceil(totalOrders / limitNum)
+        });
+        
+    } catch (error) {
+        console.error('❌ Get orders error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des commandes' });
+    }
+});
+
+// Admin: Update Order Status
+app.put('/api/orders/:id/status', auth, adminAuth, async (req, res) => {
+    try {
+        const { statut } = req.body;
+        
+        const order = await Order.findByIdAndUpdate(
+            req.params.id,
+            { statut, dateModification: new Date() },
+            { new: true }
+        ).populate('utilisateur', 'nom prenom email');
+        
+        if (!order) {
+            return res.status(404).json({ message: 'Commande non trouvée' });
+        }
+        
+        res.json({
+            message: 'Statut de la commande mis à jour avec succès',
+            order
+        });
+        
+    } catch (error) {
+        console.error('❌ Update order status error:', error);
+        res.status(500).json({ message: 'Erreur lors de la mise à jour du statut' });
+    }
+});
+
 // Create Admin User Function
 async function createAdminUser() {
     try {
@@ -403,6 +775,103 @@ async function createAdminUser() {
     }
 }
 
+// Create Sample Products Function
+async function createSampleProducts() {
+    try {
+        const productCount = await Product.countDocuments();
+        if (productCount > 0) {
+            console.log('✅ Products already exist');
+            return;
+        }
+
+        const sampleProducts = [
+            {
+                nom: 'Paracétamol 500mg',
+                description: 'Médicament contre la douleur et la fièvre',
+                prix: 150,
+                prixPromo: 120,
+                image: '/images/paracetamol.jpg',
+                categorie: 'Médicaments',
+                sousCategorie: 'Antalgiques',
+                stock: 100,
+                vedette: true,
+                promotion: true
+            },
+            {
+                nom: 'Vitamine C 1000mg',
+                description: 'Complément alimentaire vitamine C',
+                prix: 800,
+                image: '/images/vitamine-c.jpg',
+                categorie: 'Compléments alimentaires',
+                stock: 50,
+                vedette: true
+            },
+            {
+                nom: 'Crème hydratante visage',
+                description: 'Crème pour peaux sèches et sensibles',
+                prix: 1200,
+                prixPromo: 900,
+                image: '/images/creme-hydratante.jpg',
+                categorie: 'Cosmétiques',
+                sousCategorie: 'Soins du visage',
+                stock: 30,
+                promotion: true
+            },
+            {
+                nom: 'Thermomètre digital',
+                description: 'Thermomètre médical précis et rapide',
+                prix: 2500,
+                image: '/images/thermometre.jpg',
+                categorie: 'Matériel médical',
+                stock: 20,
+                vedette: true
+            },
+            {
+                nom: 'Serum physiologique',
+                description: 'Solution saline stérile 9ml x 20',
+                prix: 180,
+                image: '/images/serum-physiologique.jpg',
+                categorie: 'Hygiène',
+                sousCategorie: 'Soins bébé',
+                stock: 80
+            },
+            {
+                nom: 'Magnésium 300mg',
+                description: 'Complément alimentaire anti-stress',
+                prix: 950,
+                image: '/images/magnesium.jpg',
+                categorie: 'Compléments alimentaires',
+                stock: 40
+            },
+            {
+                nom: 'Masque chirurgical',
+                description: 'Boîte de 50 masques chirurgicaux',
+                prix: 450,
+                prixPromo: 350,
+                image: '/images/masques.jpg',
+                categorie: 'Protection',
+                stock: 60,
+                promotion: true
+            },
+            {
+                nom: 'Sirop contre la toux',
+                description: 'Sirop naturel au miel et plantes',
+                prix: 320,
+                image: '/images/sirop-toux.jpg',
+                categorie: 'Médicaments',
+                sousCategorie: 'ORL',
+                stock: 25
+            }
+        ];
+
+        await Product.insertMany(sampleProducts);
+        console.log('✅ Sample products created successfully');
+
+    } catch (error) {
+        console.error('❌ Sample products creation error:', error);
+    }
+}
+
 // MongoDB Connection
 const connectDB = async () => {
     try {
@@ -415,6 +884,7 @@ const connectDB = async () => {
         
         console.log('✅ MongoDB connected');
         await createAdminUser();
+        await createSampleProducts();
         
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error);

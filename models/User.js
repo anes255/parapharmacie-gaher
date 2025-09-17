@@ -26,14 +26,14 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Le mot de passe est requis'],
         minlength: [6, 'Le mot de passe doit contenir au moins 6 caractères'],
-        select: false  // Don't return password by default
+        select: false // Ne pas inclure le mot de passe par défaut dans les requêtes
     },
     telephone: {
         type: String,
-        required: [true, 'Le téléphone est requis'],
+        required: [true, 'Le numéro de téléphone est requis'],
         unique: true,
         trim: true,
-        match: [/^(\+213|0)[5-9]\d{8}$/, 'Format de téléphone invalide (numéro algérien requis)']
+        match: [/^(\+213|0)[5-9]\d{8}$/, 'Format de téléphone algérien invalide']
     },
     adresse: {
         type: String,
@@ -45,18 +45,35 @@ const UserSchema = new mongoose.Schema({
         type: String,
         default: '',
         trim: true,
-        maxlength: [50, 'La ville ne peut pas dépasser 50 caractères']
+        maxlength: [50, 'Le nom de ville ne peut pas dépasser 50 caractères']
     },
     wilaya: {
         type: String,
         required: [true, 'La wilaya est requise'],
-        trim: true
+        enum: [
+            'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar',
+            'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou',
+            'Alger', 'Djelfa', 'Jijel', 'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba',
+            'Guelma', 'Constantine', 'Médéa', 'Mostaganem', 'M\'Sila', 'Mascara', 'Ouargla',
+            'Oran', 'El Bayadh', 'Illizi', 'Bordj Bou Arréridj', 'Boumerdès', 'El Tarf',
+            'Tindouf', 'Tissemsilt', 'El Oued', 'Khenchela', 'Souk Ahras', 'Tipaza',
+            'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent', 'Ghardaïa', 'Relizane'
+        ]
     },
     codePostal: {
         type: String,
         default: '',
         trim: true,
-        maxlength: [10, 'Le code postal ne peut pas dépasser 10 caractères']
+        match: [/^\d{5}$/, 'Code postal doit contenir 5 chiffres']
+    },
+    dateNaissance: {
+        type: Date,
+        default: null
+    },
+    genre: {
+        type: String,
+        enum: ['homme', 'femme', 'autre'],
+        default: null
     },
     role: {
         type: String,
@@ -67,51 +84,67 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: true
     },
+    emailVerifie: {
+        type: Boolean,
+        default: false
+    },
+    telephoneVerifie: {
+        type: Boolean,
+        default: false
+    },
     dateInscription: {
         type: Date,
         default: Date.now
     },
     dernierConnexion: {
         type: Date,
-        default: Date.now
+        default: null
+    },
+    tentativesConnexion: {
+        type: Number,
+        default: 0
+    },
+    compteBloque: {
+        type: Boolean,
+        default: false
+    },
+    dateBlocage: {
+        type: Date,
+        default: null
     },
     preferences: {
+        newsletter: {
+            type: Boolean,
+            default: true
+        },
         notifications: {
             type: Boolean,
             default: true
         },
-        newsletter: {
-            type: Boolean,
-            default: false
-        },
         langue: {
             type: String,
-            default: 'fr',
-            enum: ['fr', 'ar', 'en']
+            enum: ['fr', 'ar', 'en'],
+            default: 'fr'
         }
     },
-    statistiques: {
-        nombreCommandes: {
-            type: Number,
-            default: 0
-        },
-        totalDepense: {
-            type: Number,
-            default: 0
-        },
-        derniereCommande: {
-            type: Date,
-            default: null
-        }
+    resetPasswordToken: {
+        type: String,
+        default: null
+    },
+    resetPasswordExpires: {
+        type: Date,
+        default: null
+    },
+    emailVerificationToken: {
+        type: String,
+        default: null
+    },
+    emailVerificationExpires: {
+        type: Date,
+        default: null
     }
 }, {
-    timestamps: true,
-    toJSON: {
-        transform: function(doc, ret) {
-            delete ret.password;
-            return ret;
-        }
-    }
+    timestamps: true
 });
 
 // Index pour les recherches fréquentes
@@ -119,129 +152,196 @@ UserSchema.index({ email: 1 });
 UserSchema.index({ telephone: 1 });
 UserSchema.index({ role: 1 });
 UserSchema.index({ actif: 1 });
+UserSchema.index({ wilaya: 1 });
 
-// Hash password before saving
-UserSchema.pre('save', async function(next) {
-    // Only hash password if it has been modified (or is new)
-    if (!this.isModified('password')) return next();
-    
-    try {
-        console.log('🔐 Hashing password for user:', this.email);
-        
-        // Generate salt and hash password
-        const salt = await bcrypt.genSalt(12);
-        this.password = await bcrypt.hash(this.password, salt);
-        
-        console.log('✅ Password hashed successfully');
-        next();
-    } catch (error) {
-        console.error('❌ Password hashing failed:', error);
-        next(error);
-    }
-});
-
-// Method to compare password
-UserSchema.methods.comparePassword = async function(candidatePassword) {
-    try {
-        if (!candidatePassword || !this.password) {
-            return false;
-        }
-        
-        console.log('🔍 Comparing passwords for user:', this.email);
-        const isMatch = await bcrypt.compare(candidatePassword, this.password);
-        console.log('🔍 Password comparison result:', isMatch);
-        
-        return isMatch;
-    } catch (error) {
-        console.error('❌ Password comparison error:', error);
-        return false;
-    }
-};
-
-// Method to update last connection
-UserSchema.methods.updateLastConnection = function() {
-    this.dernierConnexion = new Date();
-    return this.save({ validateBeforeSave: false });
-};
-
-// Method to get public profile (without sensitive data)
-UserSchema.methods.getPublicProfile = function() {
-    return {
-        _id: this._id,
-        nom: this.nom,
-        prenom: this.prenom,
-        email: this.email,
-        telephone: this.telephone,
-        adresse: this.adresse,
-        ville: this.ville,
-        wilaya: this.wilaya,
-        role: this.role,
-        dateInscription: this.dateInscription,
-        dernierConnexion: this.dernierConnexion,
-        preferences: this.preferences,
-        statistiques: this.statistiques
-    };
-};
-
-// Static method to find user by email with password
-UserSchema.statics.findByEmailWithPassword = function(email) {
-    return this.findOne({ email: email.toLowerCase(), actif: true }).select('+password');
-};
-
-// Static method to validate password strength
-UserSchema.statics.validatePassword = function(password) {
-    const errors = [];
-    
-    if (!password || password.length < 6) {
-        errors.push('Le mot de passe doit contenir au moins 6 caractères');
-    }
-    
-    if (!/[A-Za-z]/.test(password)) {
-        errors.push('Le mot de passe doit contenir au moins une lettre');
-    }
-    
-    if (!/[0-9]/.test(password)) {
-        errors.push('Le mot de passe doit contenir au moins un chiffre');
-    }
-    
-    return {
-        isValid: errors.length === 0,
-        errors
-    };
-};
-
-// Virtual for full name
+// Virtual pour le nom complet
 UserSchema.virtual('nomComplet').get(function() {
     return `${this.prenom} ${this.nom}`;
 });
 
-// Virtual to check if user is admin
-UserSchema.virtual('estAdmin').get(function() {
-    return this.role === 'admin';
+// Virtual pour vérifier si l'utilisateur est majeur
+UserSchema.virtual('estMajeur').get(function() {
+    if (!this.dateNaissance) return null;
+    const age = Math.floor((Date.now() - this.dateNaissance.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+    return age >= 18;
 });
 
-// Method to update user statistics after order
-UserSchema.methods.updateStatistiquesCommande = async function(montantCommande) {
-    this.statistiques.nombreCommandes += 1;
-    this.statistiques.totalDepense += montantCommande;
-    this.statistiques.derniereCommande = new Date();
+// Pre-save hook pour hasher le mot de passe
+UserSchema.pre('save', async function(next) {
+    // Ne hasher que si le mot de passe a été modifié ou est nouveau
+    if (!this.isModified('password')) {
+        return next();
+    }
     
-    return this.save({ validateBeforeSave: false });
-};
-
-// Pre-remove middleware to handle user deletion
-UserSchema.pre('remove', async function(next) {
     try {
-        // Here you could add logic to handle orders when user is deleted
-        // For example, anonymize orders instead of deleting them
-        console.log('🗑️ User being removed:', this.email);
+        // Générer le salt et hasher le mot de passe
+        const salt = await bcrypt.genSalt(12);
+        this.password = await bcrypt.hash(this.password, salt);
         next();
     } catch (error) {
         next(error);
     }
 });
 
-// Export model
-const User = mongoose.model('User', UserSchema);
+// Pre-save hook pour normaliser les données
+UserSchema.pre('save', function(next) {
+    // Normaliser l'email
+    if (this.email) {
+        this.email = this.email.toLowerCase().trim();
+    }
+    
+    // Normaliser le téléphone
+    if (this.telephone) {
+        this.telephone = this.telephone.replace(/\s+/g, '');
+    }
+    
+    // Nettoyer les espaces
+    if (this.nom) this.nom = this.nom.trim();
+    if (this.prenom) this.prenom = this.prenom.trim();
+    if (this.adresse) this.adresse = this.adresse.trim();
+    if (this.ville) this.ville = this.ville.trim();
+    
+    next();
+});
 
-module.exports = User;
+// Méthode pour comparer les mots de passe
+UserSchema.methods.comparePassword = async function(candidatePassword) {
+    try {
+        return await bcrypt.compare(candidatePassword, this.password);
+    } catch (error) {
+        throw new Error('Erreur lors de la vérification du mot de passe');
+    }
+};
+
+// Méthode pour mettre à jour la dernière connexion
+UserSchema.methods.updateLastConnection = async function() {
+    this.dernierConnexion = new Date();
+    this.tentativesConnexion = 0; // Reset failed attempts
+    return this.save({ validateBeforeSave: false });
+};
+
+// Méthode pour incrémenter les tentatives de connexion
+UserSchema.methods.incrementLoginAttempts = async function() {
+    this.tentativesConnexion += 1;
+    
+    // Bloquer le compte après 5 tentatives échouées
+    if (this.tentativesConnexion >= 5) {
+        this.compteBloque = true;
+        this.dateBlocage = new Date();
+    }
+    
+    return this.save({ validateBeforeSave: false });
+};
+
+// Méthode pour débloquer le compte
+UserSchema.methods.unblockAccount = async function() {
+    this.compteBloque = false;
+    this.dateBlocage = null;
+    this.tentativesConnexion = 0;
+    return this.save({ validateBeforeSave: false });
+};
+
+// Méthode pour générer un token de réinitialisation
+UserSchema.methods.generateResetToken = function() {
+    const crypto = require('crypto');
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    
+    this.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+    this.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+    
+    return resetToken;
+};
+
+// Méthode pour générer un token de vérification email
+UserSchema.methods.generateEmailVerificationToken = function() {
+    const crypto = require('crypto');
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    
+    this.emailVerificationToken = crypto.createHash('sha256').update(verificationToken).digest('hex');
+    this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 heures
+    
+    return verificationToken;
+};
+
+// Méthode pour obtenir les statistiques utilisateur
+UserSchema.statics.getStatistics = async function() {
+    try {
+        const stats = await this.aggregate([
+            {
+                $group: {
+                    _id: null,
+                    totalUsers: { $sum: 1 },
+                    activeUsers: {
+                        $sum: {
+                            $cond: [{ $eq: ['$actif', true] }, 1, 0]
+                        }
+                    },
+                    verifiedEmails: {
+                        $sum: {
+                            $cond: [{ $eq: ['$emailVerifie', true] }, 1, 0]
+                        }
+                    },
+                    adminUsers: {
+                        $sum: {
+                            $cond: [{ $eq: ['$role', 'admin'] }, 1, 0]
+                        }
+                    }
+                }
+            }
+        ]);
+        
+        return stats[0] || {
+            totalUsers: 0,
+            activeUsers: 0,
+            verifiedEmails: 0,
+            adminUsers: 0
+        };
+    } catch (error) {
+        throw new Error('Erreur lors de la récupération des statistiques');
+    }
+};
+
+// Méthode pour obtenir les utilisateurs par wilaya
+UserSchema.statics.getUsersByWilaya = async function() {
+    try {
+        return await this.aggregate([
+            {
+                $match: { actif: true }
+            },
+            {
+                $group: {
+                    _id: '$wilaya',
+                    count: { $sum: 1 }
+                }
+            },
+            {
+                $sort: { count: -1 }
+            }
+        ]);
+    } catch (error) {
+        throw new Error('Erreur lors de la récupération des statistiques par wilaya');
+    }
+};
+
+// Assurer que les virtuals sont inclus lors de la sérialisation
+UserSchema.set('toJSON', { 
+    virtuals: true,
+    transform: function(doc, ret) {
+        delete ret.password;
+        delete ret.resetPasswordToken;
+        delete ret.emailVerificationToken;
+        return ret;
+    }
+});
+
+UserSchema.set('toObject', { 
+    virtuals: true,
+    transform: function(doc, ret) {
+        delete ret.password;
+        delete ret.resetPasswordToken;
+        delete ret.emailVerificationToken;
+        return ret;
+    }
+});
+
+module.exports = mongoose.model('User', UserSchema);

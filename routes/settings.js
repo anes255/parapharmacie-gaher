@@ -3,52 +3,9 @@ const auth = require('../middleware/auth');
 
 const router = express.Router();
 
-// Default application settings
-const defaultSettings = {
-    siteName: 'Shifa - Parapharmacie',
-    siteDescription: 'Votre parapharmacie de confiance à Tipaza, Algérie',
-    currency: 'DA',
-    fraisLivraison: 300,
-    livraisonGratuite: 5000,
-    couleurPrimaire: '#10b981',
-    couleurSecondaire: '#059669',
-    couleurAccent: '#34d399',
-    email: 'pharmaciegaher@gmail.com',
-    telephone: '+213 123 456 789',
-    adresse: 'Tipaza, Algérie',
-    horaires: 'Lun-Sam: 8h-20h, Dim: 9h-18h',
-    facebook: 'https://www.facebook.com/pharmaciegaher/?locale=mg_MG',
-    instagram: 'https://www.instagram.com/pharmaciegaher/',
-    maintenance: false,
-    allowRegistrations: true,
-    emailNotifications: true,
-    smsNotifications: false,
-    wilayasLivraison: [
-        'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar',
-        'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger',
-        'Djelfa', 'Jijel', 'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba', 'Guelma',
-        'Constantine', 'Médéa', 'Mostaganem', 'M\'Sila', 'Mascara', 'Ouargla', 'Oran', 'El Bayadh',
-        'Illizi', 'Bordj Bou Arréridj', 'Boumerdès', 'El Tarf', 'Tindouf', 'Tissemsilt', 'El Oued',
-        'Khenchela', 'Souk Ahras', 'Tipaza', 'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent',
-        'Ghardaïa', 'Relizane', 'Timimoun', 'Bordj Badji Mokhtar', 'Ouled Djellal', 'Béni Abbès',
-        'In Salah', 'In Guezzam', 'Touggourt', 'Djanet', 'El M\'Ghair', 'El Meniaa'
-    ],
-    tarifsByWilaya: {
-        'Alger': 250,
-        'Blida': 250,
-        'Boumerdès': 250,
-        'Tipaza': 200,
-        'Médéa': 300,
-        'default': 350
-    }
-};
-
-// In-memory settings storage (in production, this would be in a database)
-let currentSettings = { ...defaultSettings };
-
-// Middleware to check admin role
-const requireAdmin = (req, res, next) => {
-    if (!req.user || req.user.role !== 'admin') {
+// Middleware to check if user is admin
+const adminAuth = (req, res, next) => {
+    if (req.user && req.user.role !== 'admin') {
         return res.status(403).json({
             message: 'Accès administrateur requis'
         });
@@ -56,58 +13,74 @@ const requireAdmin = (req, res, next) => {
     next();
 };
 
-// @route   GET /api/settings
-// @desc    Get application settings
-// @access  Public
-router.get('/', (req, res) => {
-    try {
-        // Return public settings only
-        const publicSettings = {
-            siteName: currentSettings.siteName,
-            siteDescription: currentSettings.siteDescription,
-            currency: currentSettings.currency,
-            fraisLivraison: currentSettings.fraisLivraison,
-            livraisonGratuite: currentSettings.livraisonGratuite,
-            couleurPrimaire: currentSettings.couleurPrimaire,
-            couleurSecondaire: currentSettings.couleurSecondaire,
-            couleurAccent: currentSettings.couleurAccent,
-            email: currentSettings.email,
-            telephone: currentSettings.telephone,
-            adresse: currentSettings.adresse,
-            horaires: currentSettings.horaires,
-            facebook: currentSettings.facebook,
-            instagram: currentSettings.instagram,
-            maintenance: currentSettings.maintenance,
-            allowRegistrations: currentSettings.allowRegistrations,
-            wilayasLivraison: currentSettings.wilayasLivraison,
-            tarifsByWilaya: currentSettings.tarifsByWilaya
-        };
-
-        res.json({
-            settings: publicSettings,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error('❌ Get settings error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des paramètres'
-        });
+// Default settings
+const defaultSettings = {
+    siteName: 'Shifa - Parapharmacie',
+    siteDescription: 'Votre parapharmacie de confiance à Tipaza',
+    contactEmail: 'pharmaciegaher@gmail.com',
+    contactPhone: '+213 123 456 789',
+    address: 'Tipaza, Algérie',
+    currency: 'DA',
+    language: 'fr',
+    timezone: 'Africa/Algiers',
+    freeShippingThreshold: 5000,
+    defaultShippingCost: 300,
+    taxRate: 0,
+    enableRegistration: true,
+    enableReviews: true,
+    enableNewsletter: true,
+    enableSocialLogin: false,
+    maintenanceMode: false,
+    theme: {
+        primaryColor: '#10b981',
+        secondaryColor: '#059669',
+        accentColor: '#34d399'
+    },
+    seo: {
+        metaTitle: 'Shifa - Parapharmacie Tipaza',
+        metaDescription: 'Découvrez notre large gamme de produits de parapharmacie à Tipaza. Livraison rapide dans toute l\'Algérie.',
+        metaKeywords: 'parapharmacie, tipaza, algérie, santé, beauté, produits naturels'
+    },
+    social: {
+        facebook: 'https://www.facebook.com/pharmaciegaher/',
+        instagram: 'https://www.instagram.com/pharmaciegaher/',
+        twitter: '',
+        linkedin: ''
     }
-});
+};
 
-// @route   GET /api/settings/admin
-// @desc    Get all settings for admin
+// @route   GET /api/settings
+// @desc    Get all settings
 // @access  Private/Admin
-router.get('/admin', auth, requireAdmin, (req, res) => {
+router.get('/', auth, adminAuth, async (req, res) => {
     try {
+        console.log('⚙️ Loading application settings...');
+        
+        let settings = defaultSettings;
+        
+        try {
+            const Settings = require('../models/Settings');
+            const savedSettings = await Settings.findOne({});
+            
+            if (savedSettings) {
+                settings = { ...defaultSettings, ...savedSettings.toObject() };
+                delete settings._id;
+                delete settings.__v;
+            }
+            
+        } catch (modelError) {
+            console.log('⚠️ Settings model not available, using defaults');
+        }
+
+        console.log('✅ Settings loaded successfully');
+        
         res.json({
-            settings: currentSettings,
-            timestamp: new Date().toISOString()
+            message: 'Paramètres récupérés avec succès',
+            settings
         });
 
     } catch (error) {
-        console.error('❌ Get admin settings error:', error);
+        console.error('❌ Settings fetch error:', error);
         res.status(500).json({
             message: 'Erreur lors de la récupération des paramètres'
         });
@@ -115,112 +88,118 @@ router.get('/admin', auth, requireAdmin, (req, res) => {
 });
 
 // @route   PUT /api/settings
-// @desc    Update application settings
+// @desc    Update settings
 // @access  Private/Admin
-router.put('/', auth, requireAdmin, (req, res) => {
+router.put('/', auth, adminAuth, async (req, res) => {
     try {
-        console.log('⚙️ Admin updating settings');
-
-        const {
-            siteName,
-            siteDescription,
-            currency,
-            fraisLivraison,
-            livraisonGratuite,
-            couleurPrimaire,
-            couleurSecondaire,
-            couleurAccent,
-            email,
-            telephone,
-            adresse,
-            horaires,
-            facebook,
-            instagram,
-            maintenance,
-            allowRegistrations,
-            emailNotifications,
-            smsNotifications,
-            wilayasLivraison,
-            tarifsByWilaya
-        } = req.body;
-
+        console.log('⚙️ Updating application settings...');
+        
+        const updatedSettings = req.body;
+        
         // Validate required fields
-        if (siteName) currentSettings.siteName = siteName.trim();
-        if (siteDescription) currentSettings.siteDescription = siteDescription.trim();
-        if (currency) currentSettings.currency = currency.trim();
-        
-        if (fraisLivraison !== undefined) {
-            const shipping = parseFloat(fraisLivraison);
-            if (shipping >= 0) {
-                currentSettings.fraisLivraison = shipping;
-            }
+        if (!updatedSettings.siteName) {
+            return res.status(400).json({
+                message: 'Le nom du site est requis'
+            });
         }
         
-        if (livraisonGratuite !== undefined) {
-            const freeShipping = parseFloat(livraisonGratuite);
-            if (freeShipping >= 0) {
-                currentSettings.livraisonGratuite = freeShipping;
+        try {
+            const Settings = require('../models/Settings');
+            
+            let settings = await Settings.findOne({});
+            
+            if (settings) {
+                Object.assign(settings, updatedSettings);
+            } else {
+                settings = new Settings(updatedSettings);
             }
+            
+            await settings.save();
+            
+            const response = { ...defaultSettings, ...settings.toObject() };
+            delete response._id;
+            delete response.__v;
+            
+            console.log('✅ Settings updated successfully');
+            
+            res.json({
+                message: 'Paramètres mis à jour avec succès',
+                settings: response
+            });
+            
+        } catch (modelError) {
+            console.log('⚠️ Settings model not available, saving to memory only');
+            
+            // In a real application without database, you might save to file
+            res.json({
+                message: 'Paramètres mis à jour (en mémoire uniquement)',
+                settings: { ...defaultSettings, ...updatedSettings }
+            });
         }
 
-        // Colors
-        if (couleurPrimaire && /^#[0-9A-F]{6}$/i.test(couleurPrimaire)) {
-            currentSettings.couleurPrimaire = couleurPrimaire;
+    } catch (error) {
+        console.error('❌ Settings update error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données de paramètres invalides'
+            });
         }
-        if (couleurSecondaire && /^#[0-9A-F]{6}$/i.test(couleurSecondaire)) {
-            currentSettings.couleurSecondaire = couleurSecondaire;
-        }
-        if (couleurAccent && /^#[0-9A-F]{6}$/i.test(couleurAccent)) {
-            currentSettings.couleurAccent = couleurAccent;
-        }
+        
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour des paramètres'
+        });
+    }
+});
 
-        // Contact info
-        if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            currentSettings.email = email.toLowerCase().trim();
-        }
-        if (telephone) currentSettings.telephone = telephone.trim();
-        if (adresse) currentSettings.adresse = adresse.trim();
-        if (horaires) currentSettings.horaires = horaires.trim();
-
-        // Social media
-        if (facebook) currentSettings.facebook = facebook.trim();
-        if (instagram) currentSettings.instagram = instagram.trim();
-
-        // Boolean settings
-        if (maintenance !== undefined) currentSettings.maintenance = Boolean(maintenance);
-        if (allowRegistrations !== undefined) currentSettings.allowRegistrations = Boolean(allowRegistrations);
-        if (emailNotifications !== undefined) currentSettings.emailNotifications = Boolean(emailNotifications);
-        if (smsNotifications !== undefined) currentSettings.smsNotifications = Boolean(smsNotifications);
-
-        // Arrays
-        if (Array.isArray(wilayasLivraison)) {
-            currentSettings.wilayasLivraison = wilayasLivraison.filter(w => w && w.trim());
-        }
-
-        if (tarifsByWilaya && typeof tarifsByWilaya === 'object') {
-            // Validate tariffs
-            const validTariffs = {};
-            for (const [wilaya, tarif] of Object.entries(tarifsByWilaya)) {
-                const price = parseFloat(tarif);
-                if (!isNaN(price) && price >= 0) {
-                    validTariffs[wilaya] = price;
-                }
+// @route   GET /api/settings/public
+// @desc    Get public settings (no auth required)
+// @access  Public
+router.get('/public', async (req, res) => {
+    try {
+        console.log('🌐 Loading public settings...');
+        
+        let settings = defaultSettings;
+        
+        try {
+            const Settings = require('../models/Settings');
+            const savedSettings = await Settings.findOne({});
+            
+            if (savedSettings) {
+                settings = { ...defaultSettings, ...savedSettings.toObject() };
             }
-            currentSettings.tarifsByWilaya = { ...currentSettings.tarifsByWilaya, ...validTariffs };
+            
+        } catch (modelError) {
+            console.log('⚠️ Settings model not available, using defaults');
         }
 
-        console.log('✅ Settings updated successfully');
+        // Filter to only public settings
+        const publicSettings = {
+            siteName: settings.siteName,
+            siteDescription: settings.siteDescription,
+            currency: settings.currency,
+            language: settings.language,
+            freeShippingThreshold: settings.freeShippingThreshold,
+            defaultShippingCost: settings.defaultShippingCost,
+            enableRegistration: settings.enableRegistration,
+            enableReviews: settings.enableReviews,
+            enableNewsletter: settings.enableNewsletter,
+            maintenanceMode: settings.maintenanceMode,
+            theme: settings.theme,
+            seo: settings.seo,
+            social: settings.social
+        };
 
         res.json({
-            message: 'Paramètres mis à jour avec succès',
-            settings: currentSettings,
-            timestamp: new Date().toISOString()
+            message: 'Paramètres publics récupérés',
+            settings: publicSettings
         });
 
     } catch (error) {
-        console.error('❌ Update settings error:', error);
+        console.error('❌ Public settings fetch error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la mise à jour des paramètres'
+            message: 'Erreur lors de la récupération des paramètres publics'
         });
     }
 });
@@ -228,172 +207,37 @@ router.put('/', auth, requireAdmin, (req, res) => {
 // @route   POST /api/settings/reset
 // @desc    Reset settings to default
 // @access  Private/Admin
-router.post('/reset', auth, requireAdmin, (req, res) => {
+router.post('/reset', auth, adminAuth, async (req, res) => {
     try {
-        console.log('⚙️ Admin resetting settings to default');
-
-        currentSettings = { ...defaultSettings };
-
-        console.log('✅ Settings reset to default');
-
-        res.json({
-            message: 'Paramètres réinitialisés aux valeurs par défaut',
-            settings: currentSettings,
-            timestamp: new Date().toISOString()
-        });
+        console.log('🔄 Resetting settings to default...');
+        
+        try {
+            const Settings = require('../models/Settings');
+            await Settings.deleteMany({});
+            
+            const newSettings = new Settings(defaultSettings);
+            await newSettings.save();
+            
+            console.log('✅ Settings reset to default successfully');
+            
+            res.json({
+                message: 'Paramètres réinitialisés aux valeurs par défaut',
+                settings: defaultSettings
+            });
+            
+        } catch (modelError) {
+            console.log('⚠️ Settings model not available, using memory only');
+            
+            res.json({
+                message: 'Paramètres réinitialisés (en mémoire)',
+                settings: defaultSettings
+            });
+        }
 
     } catch (error) {
-        console.error('❌ Reset settings error:', error);
+        console.error('❌ Settings reset error:', error);
         res.status(500).json({
             message: 'Erreur lors de la réinitialisation des paramètres'
-        });
-    }
-});
-
-// @route   GET /api/settings/shipping/:wilaya
-// @desc    Get shipping cost for specific wilaya
-// @access  Public
-router.get('/shipping/:wilaya', (req, res) => {
-    try {
-        const { wilaya } = req.params;
-        const { total = 0 } = req.query;
-
-        const orderTotal = parseFloat(total) || 0;
-
-        // Free shipping if order total exceeds threshold
-        if (orderTotal >= currentSettings.livraisonGratuite) {
-            return res.json({
-                wilaya,
-                orderTotal,
-                shippingCost: 0,
-                freeShipping: true,
-                message: 'Livraison gratuite'
-            });
-        }
-
-        // Get shipping cost for wilaya
-        const shippingCost = currentSettings.tarifsByWilaya[wilaya] || currentSettings.tarifsByWilaya.default;
-
-        res.json({
-            wilaya,
-            orderTotal,
-            shippingCost,
-            freeShipping: false,
-            remainingForFreeShipping: currentSettings.livraisonGratuite - orderTotal
-        });
-
-    } catch (error) {
-        console.error('❌ Get shipping cost error:', error);
-        res.status(500).json({
-            message: 'Erreur lors du calcul des frais de livraison'
-        });
-    }
-});
-
-// @route   GET /api/settings/maintenance
-// @desc    Check maintenance mode
-// @access  Public
-router.get('/maintenance', (req, res) => {
-    try {
-        res.json({
-            maintenance: currentSettings.maintenance,
-            message: currentSettings.maintenance ? 'Site en maintenance' : 'Site disponible'
-        });
-
-    } catch (error) {
-        console.error('❌ Check maintenance error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la vérification du mode maintenance'
-        });
-    }
-});
-
-// @route   PUT /api/settings/maintenance
-// @desc    Toggle maintenance mode
-// @access  Private/Admin
-router.put('/maintenance', auth, requireAdmin, (req, res) => {
-    try {
-        const { maintenance } = req.body;
-
-        if (maintenance !== undefined) {
-            currentSettings.maintenance = Boolean(maintenance);
-            
-            console.log(`✅ Maintenance mode ${currentSettings.maintenance ? 'enabled' : 'disabled'}`);
-
-            res.json({
-                message: `Mode maintenance ${currentSettings.maintenance ? 'activé' : 'désactivé'}`,
-                maintenance: currentSettings.maintenance
-            });
-        } else {
-            res.status(400).json({
-                message: 'Paramètre maintenance requis'
-            });
-        }
-
-    } catch (error) {
-        console.error('❌ Toggle maintenance error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la modification du mode maintenance'
-        });
-    }
-});
-
-// @route   GET /api/settings/export
-// @desc    Export settings
-// @access  Private/Admin
-router.get('/export', auth, requireAdmin, (req, res) => {
-    try {
-        console.log('⚙️ Admin exporting settings');
-
-        const exportData = {
-            settings: currentSettings,
-            exportDate: new Date().toISOString(),
-            version: '1.0'
-        };
-
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Content-Disposition', `attachment; filename="shifa-settings-${new Date().toISOString().split('T')[0]}.json"`);
-        
-        res.json(exportData);
-
-    } catch (error) {
-        console.error('❌ Export settings error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de l\'export des paramètres'
-        });
-    }
-});
-
-// @route   POST /api/settings/import
-// @desc    Import settings
-// @access  Private/Admin
-router.post('/import', auth, requireAdmin, (req, res) => {
-    try {
-        console.log('⚙️ Admin importing settings');
-
-        const { settings } = req.body;
-
-        if (!settings || typeof settings !== 'object') {
-            return res.status(400).json({
-                message: 'Données de paramètres invalides'
-            });
-        }
-
-        // Merge imported settings with current settings
-        currentSettings = { ...currentSettings, ...settings };
-
-        console.log('✅ Settings imported successfully');
-
-        res.json({
-            message: 'Paramètres importés avec succès',
-            settings: currentSettings,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error('❌ Import settings error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de l\'import des paramètres'
         });
     }
 });

@@ -16,9 +16,8 @@ const corsOptions = {
         'http://localhost:5173',
         'https://parapharmacieshifa.com',
         'http://parapharmacieshifa.com',
-        'https://anes255.github.io',
-        'http://anes255.github.io',
-        '*'  // Allow all origins for now - remove in production
+        'https://parapharmacie-frontend.vercel.app',
+        'https://parapharmacie-frontend.onrender.com'
     ],
     credentials: false,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -39,13 +38,13 @@ app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging
+// Request logging middleware
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
     next();
 });
 
-// ROOT ROUTE
+// Health check route
 app.get('/', (req, res) => {
     res.json({
         message: 'Shifa Parapharmacie Backend API',
@@ -55,7 +54,6 @@ app.get('/', (req, res) => {
     });
 });
 
-// Health check
 app.get('/api/health', (req, res) => {
     res.json({
         message: 'API is healthy',
@@ -70,36 +68,53 @@ const connectDB = async () => {
     try {
         console.log('🔄 Connecting to MongoDB...');
         
-        const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/parapharmacie';
+        if (!process.env.MONGODB_URI) {
+            throw new Error('MONGODB_URI environment variable is not set');
+        }
         
-        await mongoose.connect(mongoUri, {
+        const conn = await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true
         });
         
         console.log('✅ MongoDB connected successfully');
+        console.log(`📍 Database: ${conn.connection.name}`);
+        console.log(`🌐 Host: ${conn.connection.host}:${conn.connection.port}`);
         
-        // Initialize admin user after connection
+        // Initialize admin user after successful connection
         await initializeAdmin();
+        
+        return conn;
         
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error.message);
-        setTimeout(connectDB, 5000);
+        
+        // Retry connection after delay in production
+        if (process.env.NODE_ENV === 'production') {
+            console.log('⏳ Retrying connection in 10 seconds...');
+            setTimeout(connectDB, 10000);
+        } else {
+            process.exit(1);
+        }
     }
 };
 
 // Initialize admin user
 async function initializeAdmin() {
     try {
-        console.log('🔄 Initializing admin user...');
+        // Import User model only after MongoDB connection
+        const User = require('./models/User');
+        const bcrypt = require('bcryptjs');
         
-        // Dynamic import of User model after connection
-        const User = mongoose.model('User');
+        console.log('👤 Checking for admin user...');
         
         let admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
         
         if (!admin) {
-            console.log('📝 Creating default admin user...');
+            console.log('🔧 Creating admin user...');
+            
+            const salt = await bcrypt.genSalt(12);
+            const hashedPassword = await bcrypt.hash('anesaya75', salt);
             
             admin = new User({
                 nom: 'Gaher',
@@ -108,199 +123,205 @@ async function initializeAdmin() {
                 telephone: '+213123456789',
                 adresse: 'Tipaza, Algérie',
                 wilaya: 'Tipaza',
-                password: 'anesaya75',
-                role: 'admin'
+                password: hashedPassword,
+                role: 'admin',
+                actif: true,
+                emailVerifie: true,
+                telephoneVerifie: true,
+                dateInscription: new Date()
             });
             
             await admin.save();
-            console.log('✅ Default admin user created');
-            console.log('   Email: pharmaciegaher@gmail.com');
-            console.log('   Password: anesaya75');
+            console.log('✅ Admin user created successfully');
         } else {
             console.log('✅ Admin user already exists');
         }
         
+        // Initialize default settings
+        await initializeSettings();
+        
     } catch (error) {
         console.error('❌ Admin initialization failed:', error.message);
+        // Don't fail the server if admin creation fails
+    }
+}
+
+// Initialize default settings
+async function initializeSettings() {
+    try {
+        const Settings = require('./models/Settings');
+        console.log('⚙️ Initializing settings...');
         
-        // If User model doesn't exist, create it
-        if (error.message.includes('Schema hasn\'t been registered') || error.message.includes('Cannot overwrite')) {
-            console.log('Creating User model...');
-            require('./models/User');
-            setTimeout(initializeAdmin, 1000);
-        }
+        // This will create default settings if they don't exist
+        await Settings.getSettings();
+        await Settings.initializeDefaultWilayas();
+        
+        console.log('✅ Settings initialized successfully');
+    } catch (error) {
+        console.error('❌ Settings initialization failed:', error.message);
     }
 }
 
-// Connect to database first
-connectDB();
-
-// Load routes AFTER database connection
-app.use((req, res, next) => {
-    if (mongoose.connection.readyState !== 1) {
-        return res.status(503).json({ 
-            message: 'Database not ready',
-            status: 'connecting'
-        });
+// Routes - Load after database connection is established
+const loadRoutes = () => {
+    console.log('📦 Loading routes...');
+    
+    try {
+        // Auth routes
+        const authRoutes = require('./routes/auth');
+        app.use('/api/auth', authRoutes);
+        console.log('✅ Auth routes loaded');
+    } catch (error) {
+        console.error('❌ Auth routes failed:', error.message);
     }
-    next();
-});
-
-// Routes - Load in order
-console.log('🔄 Loading routes...');
-
-// Auth routes
-try {
-    const authRoutes = require('./routes/auth');
-    app.use('/api/auth', authRoutes);
-    console.log('✅ Auth routes loaded');
-} catch (error) {
-    console.error('❌ Auth routes failed:', error.message);
-}
-
-// Product routes
-try {
-    const productRoutes = require('./routes/products');
-    app.use('/api/products', productRoutes);
-    console.log('✅ Product routes loaded');
-} catch (error) {
-    console.error('❌ Product routes failed:', error.message);
-}
-
-// Order routes
-try {
-    const orderRoutes = require('./routes/orders');
-    app.use('/api/orders', orderRoutes);
-    console.log('✅ Order routes loaded');
-} catch (error) {
-    console.error('❌ Order routes failed:', error.message);
-}
-
-// Admin routes - MUST be after auth routes
-try {
-    const adminRoutes = require('./routes/admin');
-    app.use('/api/admin', adminRoutes);
-    console.log('✅ Admin routes loaded');
-} catch (error) {
-    console.error('❌ Admin routes failed:', error.message);
     
-    // Create basic admin routes if file doesn't exist
-    const router = express.Router();
-    const auth = require('./middleware/auth');
+    try {
+        // Product routes
+        const productRoutes = require('./routes/products');
+        app.use('/api/products', productRoutes);
+        console.log('✅ Product routes loaded');
+    } catch (error) {
+        console.error('❌ Product routes failed:', error.message);
+    }
     
-    // Simple admin orders endpoint
-    router.get('/orders', auth, async (req, res) => {
-        try {
-            if (req.user.role !== 'admin') {
-                return res.status(403).json({ message: 'Accès administrateur requis' });
-            }
-            
-            const Order = mongoose.model('Order');
-            const orders = await Order.find().sort({ dateCommande: -1 }).limit(50);
-            
-            res.json({ orders });
-        } catch (error) {
-            res.status(500).json({ message: 'Erreur serveur' });
-        }
-    });
+    try {
+        // Order routes
+        const orderRoutes = require('./routes/orders');
+        app.use('/api/orders', orderRoutes);
+        console.log('✅ Order routes loaded');
+    } catch (error) {
+        console.error('❌ Order routes failed:', error.message);
+    }
     
-    // Simple admin products endpoint
-    router.get('/products', auth, async (req, res) => {
-        try {
-            if (req.user.role !== 'admin') {
-                return res.status(403).json({ message: 'Accès administrateur requis' });
-            }
-            
-            const Product = mongoose.model('Product');
-            const products = await Product.find().sort({ dateAjout: -1 });
-            
-            res.json({ products });
-        } catch (error) {
-            res.status(500).json({ message: 'Erreur serveur' });
-        }
-    });
+    try {
+        // Admin routes
+        const adminRoutes = require('./routes/admin');
+        app.use('/api/admin', adminRoutes);
+        console.log('✅ Admin routes loaded');
+    } catch (error) {
+        console.error('❌ Admin routes failed:', error.message);
+    }
     
-    // Admin dashboard
-    router.get('/dashboard', auth, async (req, res) => {
-        try {
-            if (req.user.role !== 'admin') {
-                return res.status(403).json({ message: 'Accès administrateur requis' });
-            }
-            
-            res.json({ message: 'Admin dashboard', timestamp: new Date() });
-        } catch (error) {
-            res.status(500).json({ message: 'Erreur serveur' });
-        }
-    });
+    try {
+        // Settings routes
+        const settingsRoutes = require('./routes/settings');
+        app.use('/api/settings', settingsRoutes);
+        console.log('✅ Settings routes loaded');
+    } catch (error) {
+        console.error('❌ Settings routes failed:', error.message);
+    }
     
-    app.use('/api/admin', router);
-    console.log('✅ Fallback admin routes created');
-}
-
-// Settings routes (optional)
-try {
-    const settingsRoutes = require('./routes/settings');
-    app.use('/api/settings', settingsRoutes);
-    console.log('✅ Settings routes loaded');
-} catch (error) {
-    console.log('⚠️ Settings routes not found (optional)');
-}
+    console.log('📦 Route loading completed');
+};
 
 // Error handling middleware
 app.use((error, req, res, next) => {
     console.error('🚨 Server error:', error);
     
-    if (error.name === 'ValidationError') {
-        const messages = Object.values(error.errors).map(err => err.message);
-        return res.status(400).json({
-            message: messages[0] || 'Données invalides'
-        });
-    }
+    // Don't leak error details in production
+    const isDevelopment = process.env.NODE_ENV !== 'production';
     
-    if (error.code === 11000) {
-        const field = Object.keys(error.keyPattern)[0];
-        return res.status(400).json({
-            message: `${field === 'email' ? 'Email' : field} déjà utilisé`
-        });
-    }
-    
-    if (error.name === 'JsonWebTokenError') {
-        return res.status(401).json({
-            message: 'Token invalide'
-        });
-    }
-    
-    if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({
-            message: 'Token expiré'
-        });
-    }
-    
-    res.status(500).json({ 
-        message: 'Erreur serveur interne',
-        timestamp: new Date().toISOString()
+    res.status(error.status || 500).json({
+        message: error.message || 'Erreur serveur interne',
+        ...(isDevelopment && { stack: error.stack }),
+        timestamp: new Date().toISOString(),
+        path: req.path
     });
 });
 
-// 404 handler - MUST be last
+// 404 handler - should be last route
 app.use('*', (req, res) => {
     console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
+    
     res.status(404).json({
         message: 'Route non trouvée',
         path: req.originalUrl,
         method: req.method,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        availableRoutes: [
+            '/api/health',
+            '/api/auth/*',
+            '/api/products/*',
+            '/api/orders/*',
+            '/api/admin/*',
+            '/api/settings/*'
+        ]
+    });
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('🛑 SIGTERM received, shutting down gracefully...');
+    
+    mongoose.connection.close(() => {
+        console.log('📝 MongoDB connection closed');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('🛑 SIGINT received, shutting down gracefully...');
+    
+    mongoose.connection.close(() => {
+        console.log('📝 MongoDB connection closed');
+        process.exit(0);
+    });
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+    console.error('🚨 Unhandled Promise Rejection:', err);
+    
+    // Close server & exit process
+    mongoose.connection.close(() => {
+        console.log('📝 MongoDB connection closed due to unhandled rejection');
+        process.exit(1);
     });
 });
 
 // Start server
-const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-    console.log(`\n🚀 Server running on port ${PORT}`);
-    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
-    console.log(`📚 API Base: http://localhost:${PORT}/api`);
-    console.log(`\n✅ Server is ready to accept connections`);
-});
+const startServer = async () => {
+    try {
+        // Connect to database first
+        await connectDB();
+        
+        // Load routes after successful DB connection
+        loadRoutes();
+        
+        // Start HTTP server
+        const PORT = process.env.PORT || 5000;
+        const server = app.listen(PORT, () => {
+            console.log('🚀 Server started successfully!');
+            console.log(`📡 Server running on port ${PORT}`);
+            console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+            console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+            console.log(`📚 API Base URL: http://localhost:${PORT}/api`);
+            
+            if (process.env.NODE_ENV === 'development') {
+                console.log('🔧 Development mode - detailed logging enabled');
+            }
+        });
+        
+        // Handle server errors
+        server.on('error', (error) => {
+            if (error.code === 'EADDRINUSE') {
+                console.error(`❌ Port ${PORT} is already in use`);
+                process.exit(1);
+            } else {
+                console.error('❌ Server error:', error);
+                throw error;
+            }
+        });
+        
+        return server;
+        
+    } catch (error) {
+        console.error('❌ Failed to start server:', error.message);
+        process.exit(1);
+    }
+};
+
+// Start the server
+startServer();
 
 module.exports = app;

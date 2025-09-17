@@ -63,6 +63,51 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// Load routes immediately (don't wait for DB connection)
+console.log('📦 Loading routes...');
+
+try {
+    const authRoutes = require('./routes/auth');
+    app.use('/api/auth', authRoutes);
+    console.log('✅ Auth routes loaded');
+} catch (error) {
+    console.error('❌ Auth routes failed:', error.message);
+}
+
+try {
+    const productRoutes = require('./routes/products');
+    app.use('/api/products', productRoutes);
+    console.log('✅ Product routes loaded');
+} catch (error) {
+    console.error('❌ Product routes failed:', error.message);
+}
+
+try {
+    const orderRoutes = require('./routes/orders');
+    app.use('/api/orders', orderRoutes);
+    console.log('✅ Order routes loaded');
+} catch (error) {
+    console.error('❌ Order routes failed:', error.message);
+}
+
+try {
+    const adminRoutes = require('./routes/admin');
+    app.use('/api/admin', adminRoutes);
+    console.log('✅ Admin routes loaded');
+} catch (error) {
+    console.error('❌ Admin routes failed:', error.message);
+}
+
+try {
+    const settingsRoutes = require('./routes/settings');
+    app.use('/api/settings', settingsRoutes);
+    console.log('✅ Settings routes loaded');
+} catch (error) {
+    console.error('❌ Settings routes failed:', error.message);
+}
+
+console.log('📦 Route loading completed');
+
 // MongoDB Connection
 const connectDB = async () => {
     try {
@@ -89,12 +134,12 @@ const connectDB = async () => {
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error.message);
         
-        // Retry connection after delay in production
+        // In production, retry connection after delay
         if (process.env.NODE_ENV === 'production') {
             console.log('⏳ Retrying connection in 10 seconds...');
             setTimeout(connectDB, 10000);
         } else {
-            process.exit(1);
+            console.log('⚠️ Continuing without database in development mode');
         }
     }
 };
@@ -162,58 +207,6 @@ async function initializeSettings() {
     }
 }
 
-// Routes - Load after database connection is established
-const loadRoutes = () => {
-    console.log('📦 Loading routes...');
-    
-    try {
-        // Auth routes
-        const authRoutes = require('./routes/auth');
-        app.use('/api/auth', authRoutes);
-        console.log('✅ Auth routes loaded');
-    } catch (error) {
-        console.error('❌ Auth routes failed:', error.message);
-    }
-    
-    try {
-        // Product routes
-        const productRoutes = require('./routes/products');
-        app.use('/api/products', productRoutes);
-        console.log('✅ Product routes loaded');
-    } catch (error) {
-        console.error('❌ Product routes failed:', error.message);
-    }
-    
-    try {
-        // Order routes
-        const orderRoutes = require('./routes/orders');
-        app.use('/api/orders', orderRoutes);
-        console.log('✅ Order routes loaded');
-    } catch (error) {
-        console.error('❌ Order routes failed:', error.message);
-    }
-    
-    try {
-        // Admin routes
-        const adminRoutes = require('./routes/admin');
-        app.use('/api/admin', adminRoutes);
-        console.log('✅ Admin routes loaded');
-    } catch (error) {
-        console.error('❌ Admin routes failed:', error.message);
-    }
-    
-    try {
-        // Settings routes
-        const settingsRoutes = require('./routes/settings');
-        app.use('/api/settings', settingsRoutes);
-        console.log('✅ Settings routes loaded');
-    } catch (error) {
-        console.error('❌ Settings routes failed:', error.message);
-    }
-    
-    console.log('📦 Route loading completed');
-};
-
 // Error handling middleware
 app.use((error, req, res, next) => {
     console.error('🚨 Server error:', error);
@@ -239,12 +232,19 @@ app.use('*', (req, res) => {
         method: req.method,
         timestamp: new Date().toISOString(),
         availableRoutes: [
-            '/api/health',
-            '/api/auth/*',
-            '/api/products/*',
-            '/api/orders/*',
-            '/api/admin/*',
-            '/api/settings/*'
+            'GET /',
+            'GET /api/health',
+            'POST /api/auth/login',
+            'POST /api/auth/register',
+            'GET /api/auth/profile',
+            'POST /api/auth/verify-token',
+            'GET /api/products',
+            'GET /api/products/categories/all',
+            'GET /api/products/featured/all',
+            'GET /api/orders',
+            'POST /api/orders',
+            'GET /api/admin/dashboard',
+            'GET /api/settings/public'
         ]
     });
 });
@@ -282,14 +282,8 @@ process.on('unhandledRejection', (err) => {
 // Start server
 const startServer = async () => {
     try {
-        // Connect to database first
-        await connectDB();
-        
-        // Load routes after successful DB connection
-        loadRoutes();
-        
-        // Start HTTP server
         const PORT = process.env.PORT || 5000;
+        
         const server = app.listen(PORT, () => {
             console.log('🚀 Server started successfully!');
             console.log(`📡 Server running on port ${PORT}`);
@@ -300,6 +294,11 @@ const startServer = async () => {
             if (process.env.NODE_ENV === 'development') {
                 console.log('🔧 Development mode - detailed logging enabled');
             }
+            
+            // Connect to database after server starts
+            connectDB().catch(err => {
+                console.error('Database connection failed but server continues:', err.message);
+            });
         });
         
         // Handle server errors

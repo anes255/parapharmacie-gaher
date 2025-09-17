@@ -251,6 +251,130 @@ app.get('/api/auth/profile', auth, async (req, res) => {
     }
 });
 
+// ADMIN ROUTES
+// Admin middleware
+const adminAuth = (req, res, next) => {
+    if (req.user && req.user.role === 'admin') {
+        next();
+    } else {
+        res.status(403).json({ message: 'Accès refusé - droits administrateur requis' });
+    }
+};
+
+// Admin Dashboard
+app.get('/api/admin/dashboard', auth, adminAuth, async (req, res) => {
+    try {
+        console.log('📊 Admin dashboard request');
+        
+        // Get basic stats
+        const totalUsers = await User.countDocuments();
+        const adminUsers = await User.countDocuments({ role: 'admin' });
+        const clientUsers = await User.countDocuments({ role: 'client' });
+        const activeUsers = await User.countDocuments({ actif: true });
+        
+        // Get recent users (last 30 days)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const recentUsers = await User.countDocuments({ 
+            dateInscription: { $gte: thirtyDaysAgo } 
+        });
+
+        // Get users by wilaya
+        const usersByWilaya = await User.aggregate([
+            { $group: { _id: '$wilaya', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 10 }
+        ]);
+
+        const stats = {
+            users: {
+                total: totalUsers,
+                admins: adminUsers,
+                clients: clientUsers,
+                active: activeUsers,
+                recent: recentUsers
+            },
+            products: {
+                total: 0, // Will be added when product model is created
+                categories: 0,
+                featured: 0,
+                outOfStock: 0
+            },
+            orders: {
+                total: 0, // Will be added when order model is created
+                pending: 0,
+                completed: 0,
+                revenue: 0
+            },
+            analytics: {
+                usersByWilaya: usersByWilaya,
+                recentActivity: []
+            }
+        };
+
+        console.log('✅ Dashboard stats generated');
+        res.json(stats);
+
+    } catch (error) {
+        console.error('❌ Dashboard error:', error);
+        res.status(500).json({ message: 'Erreur lors du chargement du dashboard' });
+    }
+});
+
+// Get All Users (Admin)
+app.get('/api/admin/users', auth, adminAuth, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+
+        const users = await User.find()
+            .select('-password')
+            .sort({ dateInscription: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const totalUsers = await User.countDocuments();
+
+        res.json({
+            users,
+            totalUsers,
+            currentPage: page,
+            totalPages: Math.ceil(totalUsers / limit)
+        });
+
+    } catch (error) {
+        console.error('❌ Get users error:', error);
+        res.status(500).json({ message: 'Erreur lors de la récupération des utilisateurs' });
+    }
+});
+
+// Update User Status (Admin)
+app.put('/api/admin/users/:id/status', auth, adminAuth, async (req, res) => {
+    try {
+        const { actif } = req.body;
+        
+        const user = await User.findByIdAndUpdate(
+            req.params.id,
+            { actif },
+            { new: true }
+        ).select('-password');
+
+        if (!user) {
+            return res.status(404).json({ message: 'Utilisateur non trouvé' });
+        }
+
+        res.json({
+            message: `Utilisateur ${actif ? 'activé' : 'désactivé'} avec succès`,
+            user
+        });
+
+    } catch (error) {
+        console.error('❌ Update user status error:', error);
+        res.status(500).json({ message: 'Erreur lors de la mise à jour' });
+    }
+});
+
 // Create Admin User Function
 async function createAdminUser() {
     try {

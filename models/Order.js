@@ -27,7 +27,8 @@ const OrderSchema = new mongoose.Schema({
             type: String,
             required: true,
             lowercase: true,
-            trim: true
+            trim: true,
+            match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Format d\'email invalide']
         },
         telephone: {
             type: String,
@@ -47,16 +48,7 @@ const OrderSchema = new mongoose.Schema({
         wilaya: {
             type: String,
             required: true,
-            enum: [
-                'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar',
-                'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger',
-                'Djelfa', 'Jijel', 'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba', 'Guelma',
-                'Constantine', 'Médéa', 'Mostaganem', 'M\'Sila', 'Mascara', 'Ouargla', 'Oran', 'El Bayadh',
-                'Illizi', 'Bordj Bou Arréridj', 'Boumerdès', 'El Tarf', 'Tindouf', 'Tissemsilt', 'El Oued',
-                'Khenchela', 'Souk Ahras', 'Tipaza', 'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent',
-                'Ghardaïa', 'Relizane', 'Timimoun', 'Bordj Badji Mokhtar', 'Ouled Djellal', 'Béni Abbès',
-                'In Salah', 'In Guezzam', 'Touggourt', 'Djanet', 'El M\'Ghair', 'El Meniaa'
-            ]
+            trim: true
         },
         codePostal: {
             type: String,
@@ -87,6 +79,12 @@ const OrderSchema = new mongoose.Schema({
         image: {
             type: String,
             default: ''
+        },
+        sousTotal: {
+            type: Number,
+            default: function() {
+                return this.prix * this.quantite;
+            }
         }
     }],
     sousTotal: {
@@ -97,33 +95,51 @@ const OrderSchema = new mongoose.Schema({
     },
     fraisLivraison: {
         type: Number,
-        required: true,
-        min: 0,
-        default: 0
+        default: 0,
+        min: 0
     },
     total: {
         type: Number,
         required: true,
-        min: 0
+        min: 0,
+        default: 0
     },
     statut: {
         type: String,
-        enum: ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'],
+        enum: [
+            'en-attente',
+            'confirmée', 
+            'préparée',
+            'expédiée',
+            'livrée',
+            'annulée'
+        ],
         default: 'en-attente'
     },
     modePaiement: {
         type: String,
-        enum: ['Paiement à la livraison', 'Carte bancaire', 'Virement bancaire'],
+        enum: [
+            'Paiement à la livraison',
+            'Carte bancaire',
+            'Virement bancaire',
+            'PayPal'
+        ],
         default: 'Paiement à la livraison'
     },
-    commentaires: {
+    statutPaiement: {
         type: String,
-        default: '',
-        maxlength: 1000
+        enum: [
+            'en-attente',
+            'payé',
+            'échec',
+            'remboursé'
+        ],
+        default: 'en-attente'
     },
     dateCommande: {
         type: Date,
-        default: Date.now
+        default: Date.now,
+        required: true
     },
     dateConfirmation: {
         type: Date,
@@ -137,173 +153,227 @@ const OrderSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
-    numeroSuivi: {
+    commentaires: {
         type: String,
         default: '',
-        trim: true
+        trim: true,
+        maxlength: 500
     },
-    notes: {
+    notesAdmin: {
         type: String,
         default: '',
+        trim: true,
         maxlength: 1000
+    },
+    historiqueStatut: [{
+        statut: {
+            type: String,
+            required: true
+        },
+        date: {
+            type: Date,
+            default: Date.now
+        },
+        modifiePar: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
+        },
+        commentaire: {
+            type: String,
+            default: '',
+            maxlength: 200
+        }
+    }],
+    informationsLivraison: {
+        transporteur: {
+            type: String,
+            default: '',
+            trim: true
+        },
+        numeroSuivi: {
+            type: String,
+            default: '',
+            trim: true
+        },
+        fraisLivraisonReel: {
+            type: Number,
+            default: null,
+            min: 0
+        },
+        delaiEstime: {
+            type: String,
+            default: '',
+            trim: true
+        }
+    },
+    remise: {
+        type: {
+            type: String,
+            enum: ['pourcentage', 'montant'],
+            default: null
+        },
+        valeur: {
+            type: Number,
+            default: 0,
+            min: 0
+        },
+        codePromo: {
+            type: String,
+            default: '',
+            trim: true
+        }
     }
 }, {
     timestamps: true
 });
 
-// Index pour optimiser les requêtes
+// Index pour les recherches fréquentes
 OrderSchema.index({ numeroCommande: 1 });
-OrderSchema.index({ 'client.userId': 1 });
 OrderSchema.index({ 'client.email': 1 });
+OrderSchema.index({ 'client.userId': 1 });
 OrderSchema.index({ statut: 1 });
 OrderSchema.index({ dateCommande: -1 });
+OrderSchema.index({ 'client.telephone': 1 });
 
-// Virtual pour le nom complet du client
-OrderSchema.virtual('client.nomComplet').get(function() {
-    return `${this.client.prenom} ${this.client.nom}`;
+// Virtual pour calculer le nombre total d'articles
+OrderSchema.virtual('totalArticles').get(function() {
+    return this.articles.reduce((total, article) => total + article.quantite, 0);
 });
 
-// Méthode pour calculer le total automatiquement
-OrderSchema.methods.calculateTotal = function() {
+// Virtual pour vérifier si la commande est modifiable
+OrderSchema.virtual('estModifiable').get(function() {
+    return ['en-attente', 'confirmée'].includes(this.statut);
+});
+
+// Virtual pour vérifier si la commande peut être annulée
+OrderSchema.virtual('peutEtreAnnulee').get(function() {
+    return ['en-attente', 'confirmée'].includes(this.statut);
+});
+
+// Pre-save middleware pour calculer automatiquement les totaux
+OrderSchema.pre('save', function(next) {
+    // Calculer le sous-total si ce n'est pas déjà fait
+    if (this.articles && this.articles.length > 0) {
+        this.sousTotal = this.articles.reduce((total, article) => {
+            return total + (article.prix * article.quantite);
+        }, 0);
+        
+        // Calculer le total
+        this.total = this.sousTotal + (this.fraisLivraison || 0);
+        
+        // Appliquer la remise si applicable
+        if (this.remise && this.remise.valeur > 0) {
+            if (this.remise.type === 'pourcentage') {
+                const reduction = this.sousTotal * (this.remise.valeur / 100);
+                this.total = Math.max(0, this.total - reduction);
+            } else if (this.remise.type === 'montant') {
+                this.total = Math.max(0, this.total - this.remise.valeur);
+            }
+        }
+        
+        // Arrondir à 2 décimales
+        this.sousTotal = Math.round(this.sousTotal * 100) / 100;
+        this.total = Math.round(this.total * 100) / 100;
+    }
+    
+    next();
+});
+
+// Pre-save middleware pour gérer l'historique des statuts
+OrderSchema.pre('save', function(next) {
+    if (this.isModified('statut')) {
+        // Ajouter à l'historique
+        this.historiqueStatut.push({
+            statut: this.statut,
+            date: new Date(),
+            modifiePar: null, // Sera défini par le contrôleur si nécessaire
+            commentaire: `Statut changé vers: ${this.statut}`
+        });
+        
+        // Mettre à jour les dates automatiquement
+        switch (this.statut) {
+            case 'confirmée':
+                this.dateConfirmation = new Date();
+                break;
+            case 'expédiée':
+                this.dateExpedition = new Date();
+                break;
+            case 'livrée':
+                this.dateLivraison = new Date();
+                this.statutPaiement = 'payé'; // Automatiquement payé à la livraison
+                break;
+        }
+    }
+    
+    next();
+});
+
+// Méthodes d'instance
+OrderSchema.methods.changerStatut = function(nouveauStatut, utilisateur = null, commentaire = '') {
+    const anciensStatut = this.statut;
+    this.statut = nouveauStatut;
+    
+    // L'historique sera géré par le pre-save hook
+    if (commentaire) {
+        this.historiqueStatut[this.historiqueStatut.length - 1].commentaire = commentaire;
+    }
+    if (utilisateur) {
+        this.historiqueStatut[this.historiqueStatut.length - 1].modifiePar = utilisateur;
+    }
+    
+    return this.save();
+};
+
+OrderSchema.methods.calculerTotal = function() {
     this.sousTotal = this.articles.reduce((total, article) => {
         return total + (article.prix * article.quantite);
     }, 0);
     
-    this.total = this.sousTotal + this.fraisLivraison;
+    this.total = this.sousTotal + (this.fraisLivraison || 0);
+    
+    // Appliquer la remise
+    if (this.remise && this.remise.valeur > 0) {
+        if (this.remise.type === 'pourcentage') {
+            const reduction = this.sousTotal * (this.remise.valeur / 100);
+            this.total = Math.max(0, this.total - reduction);
+        } else if (this.remise.type === 'montant') {
+            this.total = Math.max(0, this.total - this.remise.valeur);
+        }
+    }
+    
     return this.total;
 };
 
-// Méthode pour changer le statut avec validation
-OrderSchema.methods.updateStatus = function(newStatus, notes = '') {
-    const validTransitions = {
-        'en-attente': ['confirmée', 'annulée'],
-        'confirmée': ['préparée', 'annulée'],
-        'préparée': ['expédiée', 'annulée'],
-        'expédiée': ['livrée'],
-        'livrée': [],
-        'annulée': []
-    };
-    
-    if (!validTransitions[this.statut].includes(newStatus)) {
-        throw new Error(`Transition de statut invalide: ${this.statut} -> ${newStatus}`);
-    }
-    
-    this.statut = newStatus;
-    
-    // Mettre à jour les dates selon le statut
-    const now = new Date();
-    switch (newStatus) {
-        case 'confirmée':
-            this.dateConfirmation = now;
-            break;
-        case 'expédiée':
-            this.dateExpedition = now;
-            break;
-        case 'livrée':
-            this.dateLivraison = now;
-            break;
-    }
-    
-    if (notes) {
-        this.notes = notes;
-    }
-    
-    return this;
+// Méthodes statiques
+OrderSchema.statics.genererNumeroCommande = function() {
+    const timestamp = Date.now().toString();
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `CMD${timestamp.slice(-8)}${random}`;
 };
 
-// Hook pre-save pour calculer le total
-OrderSchema.pre('save', function(next) {
-    if (this.isModified('articles') || this.isModified('fraisLivraison')) {
-        this.calculateTotal();
-    }
-    next();
-});
-
-// Hook pre-save pour valider les articles
-OrderSchema.pre('save', function(next) {
-    if (this.articles.length === 0) {
-        return next(new Error('Une commande doit contenir au moins un article'));
-    }
-    
-    // Vérifier que tous les articles ont des prix et quantités valides
-    for (let article of this.articles) {
-        if (article.prix <= 0) {
-            return next(new Error(`Prix invalide pour l'article: ${article.nom}`));
-        }
-        if (article.quantite <= 0) {
-            return next(new Error(`Quantité invalide pour l'article: ${article.nom}`));
-        }
-    }
-    
-    next();
-});
-
-// Méthode statique pour générer un numéro de commande unique
-OrderSchema.statics.generateOrderNumber = async function() {
-    const prefix = 'CMD';
-    const timestamp = Date.now().toString().slice(-8);
-    let orderNumber = prefix + timestamp;
-    
-    // Vérifier l'unicité
-    let counter = 1;
-    while (await this.findOne({ numeroCommande: orderNumber })) {
-        orderNumber = prefix + timestamp + counter.toString().padStart(2, '0');
-        counter++;
-    }
-    
-    return orderNumber;
-};
-
-// Méthode statique pour obtenir les statistiques
-OrderSchema.statics.getStats = async function(dateFrom, dateTo) {
-    const matchStage = {};
-    
-    if (dateFrom || dateTo) {
-        matchStage.dateCommande = {};
-        if (dateFrom) matchStage.dateCommande.$gte = new Date(dateFrom);
-        if (dateTo) matchStage.dateCommande.$lte = new Date(dateTo);
-    }
-    
-    const stats = await this.aggregate([
-        { $match: matchStage },
+OrderSchema.statics.getStatistiquesParPeriode = function(dateDebut, dateFin) {
+    return this.aggregate([
         {
-            $group: {
-                _id: null,
-                totalOrders: { $sum: 1 },
-                totalRevenue: { $sum: '$total' },
-                averageOrderValue: { $avg: '$total' },
-                totalArticles: { 
-                    $sum: { 
-                        $sum: '$articles.quantite' 
-                    } 
+            $match: {
+                dateCommande: {
+                    $gte: dateDebut,
+                    $lte: dateFin
                 }
             }
-        }
-    ]);
-    
-    const statusStats = await this.aggregate([
-        { $match: matchStage },
+        },
         {
             $group: {
                 _id: '$statut',
-                count: { $sum: 1 }
+                count: { $sum: 1 },
+                totalMontant: { $sum: '$total' }
             }
         }
     ]);
-    
-    return {
-        general: stats[0] || {
-            totalOrders: 0,
-            totalRevenue: 0,
-            averageOrderValue: 0,
-            totalArticles: 0
-        },
-        byStatus: statusStats.reduce((acc, item) => {
-            acc[item._id] = item.count;
-            return acc;
-        }, {})
-    };
 };
 
-// Export du modèle
+// Assurer que les virtuals sont inclus lors de la sérialisation
+OrderSchema.set('toJSON', { virtuals: true });
+OrderSchema.set('toObject', { virtuals: true });
+
 module.exports = mongoose.model('Order', OrderSchema);

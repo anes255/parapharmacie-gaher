@@ -1,29 +1,18 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
-const auth = async (req, res, next) => {
-    try {
-        // Get token from header
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (!token) {
-            return res.status(401).json({
-                message: 'Aucun token fourni, accès refusé'
-            });
-        }
-    const jwt = require('jsonwebtoken');
-const User = require('../models/User');
-
 // Main authentication middleware
 const auth = async (req, res, next) => {
     try {
         // Get token from header
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
+        const token = req.header('x-auth-token') || 
+                     req.header('Authorization')?.replace('Bearer ', '') ||
+                     req.headers.authorization?.replace('Bearer ', '');
         
         // Check if no token
         if (!token) {
             return res.status(401).json({
-                message: 'Accès refusé. Token manquant.'
+                message: 'Accès refusé. Token d\'authentification manquant.'
             });
         }
         
@@ -31,26 +20,20 @@ const auth = async (req, res, next) => {
             // Verify token
             const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
             
-            console.log('🔍 Token decoded for user ID:', decoded.id);
-            
             // Get user from database
-            const user = await User.findById(decoded.id);
+            const user = await User.findById(decoded.id).select('-password');
             
             if (!user) {
-                console.log('❌ User not found for ID:', decoded.id);
                 return res.status(401).json({
                     message: 'Token invalide. Utilisateur non trouvé.'
                 });
             }
             
             if (!user.actif) {
-                console.log('❌ User account inactive:', user.email);
                 return res.status(401).json({
-                    message: 'Compte désactivé.'
+                    message: 'Compte utilisateur désactivé.'
                 });
             }
-            
-            console.log('✅ User authenticated:', user.email, 'Role:', user.role);
             
             // Add user to request object
             req.user = {
@@ -59,25 +42,29 @@ const auth = async (req, res, next) => {
                 nom: user.nom,
                 prenom: user.prenom,
                 role: user.role,
-                actif: user.actif
+                actif: user.actif,
+                wilaya: user.wilaya
             };
             
             next();
             
         } catch (jwtError) {
-            console.error('JWT Error:', jwtError.message);
+            console.error('JWT verification error:', jwtError.message);
             
             if (jwtError.name === 'TokenExpiredError') {
                 return res.status(401).json({
-                    message: 'Token expiré. Veuillez vous reconnecter.'
+                    message: 'Token expiré. Veuillez vous reconnecter.',
+                    code: 'TOKEN_EXPIRED'
                 });
             } else if (jwtError.name === 'JsonWebTokenError') {
                 return res.status(401).json({
-                    message: 'Token invalide.'
+                    message: 'Token invalide.',
+                    code: 'TOKEN_INVALID'
                 });
             } else {
                 return res.status(401).json({
-                    message: 'Erreur de vérification du token.'
+                    message: 'Erreur de vérification du token.',
+                    code: 'TOKEN_ERROR'
                 });
             }
         }
@@ -93,17 +80,18 @@ const auth = async (req, res, next) => {
 // Optional authentication middleware (doesn't fail if no token)
 const optionalAuth = async (req, res, next) => {
     try {
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
+        const token = req.header('x-auth-token') || 
+                     req.header('Authorization')?.replace('Bearer ', '') ||
+                     req.headers.authorization?.replace('Bearer ', '');
         
         if (!token) {
-            // No token, continue without user
             req.user = null;
             return next();
         }
         
         try {
             const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-            const user = await User.findById(decoded.id);
+            const user = await User.findById(decoded.id).select('-password');
             
             if (user && user.actif) {
                 req.user = {
@@ -112,13 +100,13 @@ const optionalAuth = async (req, res, next) => {
                     nom: user.nom,
                     prenom: user.prenom,
                     role: user.role,
-                    actif: user.actif
+                    actif: user.actif,
+                    wilaya: user.wilaya
                 };
             } else {
                 req.user = null;
             }
         } catch (jwtError) {
-            // Invalid token, continue without user
             req.user = null;
         }
         
@@ -131,26 +119,25 @@ const optionalAuth = async (req, res, next) => {
     }
 };
 
-// Admin role verification middleware
+// Admin role middleware
 const requireAdmin = (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({
-            message: 'Authentification requise'
+            message: 'Authentification requise pour accéder à cette ressource.'
         });
     }
     
     if (req.user.role !== 'admin') {
-        console.log('❌ Access denied for non-admin user:', req.user.email);
         return res.status(403).json({
-            message: 'Accès refusé. Droits administrateur requis.'
+            message: 'Accès refusé. Droits administrateur requis.',
+            code: 'ADMIN_REQUIRED'
         });
     }
     
-    console.log('✅ Admin access granted for:', req.user.email);
     next();
 };
 
-// Ownership or admin verification middleware
+// Ownership or admin middleware
 const requireOwnershipOrAdmin = (resourceUserIdField = 'userId') => {
     return (req, res, next) => {
         if (!req.user) {
@@ -165,7 +152,9 @@ const requireOwnershipOrAdmin = (resourceUserIdField = 'userId') => {
         }
         
         // Check resource ownership
-        const resourceUserId = req.params[resourceUserIdField] || req.body[resourceUserIdField];
+        const resourceUserId = req.params[resourceUserIdField] || 
+                              req.body[resourceUserIdField] ||
+                              req.query[resourceUserIdField];
         
         if (!resourceUserId) {
             return res.status(400).json({
@@ -183,7 +172,7 @@ const requireOwnershipOrAdmin = (resourceUserIdField = 'userId') => {
     };
 };
 
-// Rate limiting middleware for authentication endpoints
+// Rate limiting middleware
 const rateLimitAuth = () => {
     const attempts = new Map();
     const MAX_ATTEMPTS = 5;
@@ -200,7 +189,7 @@ const rateLimitAuth = () => {
         
         const userAttempts = attempts.get(identifier);
         
-        // Reset if window has passed
+        // Reset if window expired
         if (now - userAttempts.firstAttempt > WINDOW_TIME) {
             attempts.set(identifier, { count: 1, firstAttempt: now });
             return next();
@@ -210,7 +199,8 @@ const rateLimitAuth = () => {
         if (userAttempts.count >= MAX_ATTEMPTS) {
             const timeLeft = Math.ceil((WINDOW_TIME - (now - userAttempts.firstAttempt)) / 1000 / 60);
             return res.status(429).json({
-                message: `Trop de tentatives de connexion. Réessayez dans ${timeLeft} minutes.`
+                message: `Trop de tentatives de connexion. Réessayez dans ${timeLeft} minutes.`,
+                retryAfter: timeLeft
             });
         }
         
@@ -222,16 +212,15 @@ const rateLimitAuth = () => {
     };
 };
 
-// Log failed authentication attempts
+// Failed auth logging middleware
 const logFailedAuth = (req, res, next) => {
     const originalSend = res.send;
     
     res.send = function(data) {
-        // Log authentication failures
         if (res.statusCode === 401 || res.statusCode === 403) {
             console.log(`🚫 Failed auth attempt: ${req.method} ${req.path} from ${req.ip} - Status: ${res.statusCode}`);
             
-            if (req.body.email) {
+            if (req.body && req.body.email) {
                 console.log(`   Email: ${req.body.email}`);
             }
         }
@@ -242,11 +231,11 @@ const logFailedAuth = (req, res, next) => {
     next();
 };
 
-// Update last activity timestamp
+// Update last activity middleware
 const updateLastActivity = async (req, res, next) => {
     if (req.user && req.user.id) {
         try {
-            // Update in background without waiting
+            // Update in background without blocking request
             setImmediate(async () => {
                 try {
                     await User.findByIdAndUpdate(req.user.id, {
@@ -257,7 +246,6 @@ const updateLastActivity = async (req, res, next) => {
                 }
             });
         } catch (error) {
-            // Don't fail the request if this fails
             console.error('Error in updateLastActivity:', error);
         }
     }
@@ -265,77 +253,54 @@ const updateLastActivity = async (req, res, next) => {
     next();
 };
 
-// Extract client information
+// Extract client info middleware
 const extractClientInfo = (req, res, next) => {
     req.clientInfo = {
-        ip: req.ip || req.connection.remoteAddress || req.socket.remoteAddress,
-        userAgent: req.get('User-Agent') || '',
-        timestamp: new Date()
+        ip: req.ip || 
+            req.connection?.remoteAddress || 
+            req.socket?.remoteAddress ||
+            req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+            'unknown',
+        userAgent: req.get('User-Agent') || 'unknown',
+        timestamp: new Date(),
+        method: req.method,
+        path: req.path
     };
     
     next();
 };
 
-// Validate API key for certain endpoints (if needed)
-const validateApiKey = (req, res, next) => {
-    const apiKey = req.header('X-API-Key');
+// Validate token format middleware
+const validateTokenFormat = (req, res, next) => {
+    const token = req.header('x-auth-token') || 
+                 req.header('Authorization')?.replace('Bearer ', '') ||
+                 req.headers.authorization?.replace('Bearer ', '');
     
-    if (!apiKey) {
-        return res.status(401).json({
-            message: 'Clé API manquante'
-        });
-    }
-    
-    // In production, validate against stored API keys
-    const validApiKey = process.env.API_KEY || 'shifa_api_key_2024';
-    
-    if (apiKey !== validApiKey) {
-        return res.status(401).json({
-            message: 'Clé API invalide'
-        });
-    }
-    
-    next();
-};
-
-// CORS middleware for auth endpoints
-const authCORS = (req, res, next) => {
-    // Set CORS headers specifically for auth endpoints
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-auth-token');
-    res.header('Access-Control-Allow-Credentials', 'false');
-    
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+    if (token) {
+        // Basic JWT format validation
+        const parts = token.split('.');
+        if (parts.length !== 3) {
+            return res.status(401).json({
+                message: 'Format de token invalide.',
+                code: 'INVALID_TOKEN_FORMAT'
+            });
+        }
     }
     
     next();
 };
 
-// Middleware to ensure HTTPS in production
-const requireHTTPS = (req, res, next) => {
-    if (process.env.NODE_ENV === 'production' && !req.secure) {
-        return res.status(403).json({
-            message: 'HTTPS requis en production'
-        });
+// CSRF protection middleware (simple)
+const csrfProtection = (req, res, next) => {
+    // Skip CSRF for GET requests and API endpoints
+    if (req.method === 'GET' || req.path.startsWith('/api/')) {
+        return next();
     }
-    next();
-};
-
-// Debug middleware for authentication testing
-const debugAuth = (req, res, next) => {
-    if (process.env.NODE_ENV === 'development') {
-        console.log('🔍 Auth Debug Info:');
-        console.log('  Method:', req.method);
-        console.log('  Path:', req.path);
-        console.log('  Headers:', {
-            'x-auth-token': req.header('x-auth-token') ? '***PROVIDED***' : 'MISSING',
-            'authorization': req.header('Authorization') ? '***PROVIDED***' : 'MISSING'
-        });
-        console.log('  User:', req.user ? `${req.user.email} (${req.user.role})` : 'NOT_AUTHENTICATED');
-    }
+    
+    const token = req.headers['x-csrf-token'] || req.body._csrf;
+    
+    // In production, implement proper CSRF token validation
+    // For now, just pass through
     next();
 };
 
@@ -348,92 +313,6 @@ module.exports = {
     logFailedAuth,
     updateLastActivity,
     extractClientInfo,
-    validateApiKey,
-    authCORS,
-    requireHTTPS,
-    debugAuth
-};
-        try {
-            // Verify token
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-            
-            // Find user
-            const user = await User.findById(decoded.id);
-            
-            if (!user || !user.actif) {
-                return res.status(401).json({
-                    message: 'Token invalide - utilisateur introuvable'
-                });
-            }
-            
-            // Add user to request
-            req.user = {
-                id: user._id,
-                email: user.email,
-                role: user.role
-            };
-            
-            next();
-            
-        } catch (tokenError) {
-            console.error('Token verification failed:', tokenError.message);
-            return res.status(401).json({
-                message: 'Token invalide'
-            });
-        }
-        
-    } catch (error) {
-        console.error('Auth middleware error:', error);
-        res.status(500).json({
-            message: 'Erreur serveur d\'authentification'
-        });
-    }
-};
-
-// Admin middleware
-const admin = (req, res, next) => {
-    if (req.user && req.user.role === 'admin') {
-        next();
-    } else {
-        res.status(403).json({
-            message: 'Accès refusé - droits administrateur requis'
-        });
-    }
-};
-
-// Optional auth middleware (doesn't fail if no token)
-const optionalAuth = async (req, res, next) => {
-    try {
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (token) {
-            try {
-                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-                const user = await User.findById(decoded.id);
-                
-                if (user && user.actif) {
-                    req.user = {
-                        id: user._id,
-                        email: user.email,
-                        role: user.role
-                    };
-                }
-            } catch (tokenError) {
-                // Token invalid but continue anyway
-                console.log('Optional auth - invalid token:', tokenError.message);
-            }
-        }
-        
-        next();
-        
-    } catch (error) {
-        console.error('Optional auth middleware error:', error);
-        next();
-    }
-};
-
-module.exports = {
-    auth,
-    admin,
-    optionalAuth
+    validateTokenFormat,
+    csrfProtection
 };

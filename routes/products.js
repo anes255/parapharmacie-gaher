@@ -187,29 +187,104 @@ router.get('/promotions/all', async (req, res) => {
 // @access  Private/Admin
 router.post('/', [auth, requireAdmin], async (req, res) => {
     try {
-        console.log('📦 Creating new product:', req.body.nom);
+        console.log('📦 Creating new product:', req.body);
+        
+        // Extract and validate required fields
+        const {
+            nom,
+            description,
+            prix,
+            stock,
+            categorie,
+            marque,
+            prixOriginal,
+            ingredients,
+            modeEmploi,
+            precautions,
+            enVedette,
+            enPromotion,
+            actif,
+            image
+        } = req.body;
         
         // Validate required fields
-        const { nom, description, prix, stock, categorie } = req.body;
-        
-        if (!nom || !description || !prix || stock === undefined || !categorie) {
+        if (!nom || !description || prix === undefined || stock === undefined || !categorie) {
+            console.error('❌ Missing required fields:', { nom: !!nom, description: !!description, prix: prix !== undefined, stock: stock !== undefined, categorie: !!categorie });
             return res.status(400).json({
-                message: 'Champs obligatoires manquants: nom, description, prix, stock, catégorie'
+                message: 'Champs obligatoires manquants: nom, description, prix, stock, catégorie',
+                received: { nom, description, prix, stock, categorie }
             });
         }
         
+        // Validate data types and ranges
+        const prixNum = parseFloat(prix);
+        const stockNum = parseInt(stock);
+        const prixOriginalNum = prixOriginal ? parseFloat(prixOriginal) : null;
+        
+        if (isNaN(prixNum) || prixNum < 0) {
+            return res.status(400).json({
+                message: 'Le prix doit être un nombre positif'
+            });
+        }
+        
+        if (isNaN(stockNum) || stockNum < 0) {
+            return res.status(400).json({
+                message: 'Le stock doit être un nombre entier positif'
+            });
+        }
+        
+        if (prixOriginalNum && (isNaN(prixOriginalNum) || prixOriginalNum < 0)) {
+            return res.status(400).json({
+                message: 'Le prix original doit être un nombre positif'
+            });
+        }
+        
+        // Validate category
+        const validCategories = [
+            'Vitalité', 'Sport', 'Visage', 'Cheveux', 'Solaire', 
+            'Intime', 'Soins', 'Bébé', 'Homme', 'Dentaire'
+        ];
+        
+        if (!validCategories.includes(categorie)) {
+            return res.status(400).json({
+                message: 'Catégorie invalide',
+                validCategories
+            });
+        }
+        
+        // Prepare product data
         const productData = {
-            ...req.body,
+            nom: nom.trim(),
+            description: description.trim(),
+            prix: prixNum,
+            stock: stockNum,
+            categorie,
+            marque: marque ? marque.trim() : '',
+            ingredients: ingredients ? ingredients.trim() : '',
+            modeEmploi: modeEmploi ? modeEmploi.trim() : '',
+            precautions: precautions ? precautions.trim() : '',
+            enVedette: Boolean(enVedette),
+            enPromotion: Boolean(enPromotion),
+            actif: actif !== false, // Default to true
+            image: image || '',
             dateAjout: new Date()
         };
         
-        // Calculate promotion percentage if applicable
-        if (productData.enPromotion && productData.prixOriginal && productData.prixOriginal > productData.prix) {
-            productData.pourcentagePromotion = Math.round(
-                ((productData.prixOriginal - productData.prix) / productData.prixOriginal) * 100
-            );
+        // Add optional fields
+        if (prixOriginalNum) {
+            productData.prixOriginal = prixOriginalNum;
+            
+            // Calculate discount percentage if in promotion
+            if (productData.enPromotion && prixOriginalNum > prixNum) {
+                productData.pourcentagePromotion = Math.round(
+                    ((prixOriginalNum - prixNum) / prixOriginalNum) * 100
+                );
+            }
         }
         
+        console.log('📦 Final product data:', productData);
+        
+        // Create and save product
         const product = new Product(productData);
         await product.save();
         
@@ -227,12 +302,20 @@ router.post('/', [auth, requireAdmin], async (req, res) => {
             const messages = Object.values(error.errors).map(err => err.message);
             return res.status(400).json({
                 message: messages[0] || 'Données de produit invalides',
-                errors: messages
+                errors: messages,
+                details: error.errors
+            });
+        }
+        
+        if (error.code === 11000) {
+            return res.status(400).json({
+                message: 'Un produit avec ce nom existe déjà'
             });
         }
         
         res.status(500).json({
-            message: 'Erreur serveur lors de la création du produit'
+            message: 'Erreur serveur lors de la création du produit',
+            error: error.message
         });
     }
 });
@@ -252,12 +335,67 @@ router.put('/:id', [auth, requireAdmin], async (req, res) => {
             });
         }
         
-        // Update product with new data
-        Object.keys(req.body).forEach(key => {
-            if (req.body[key] !== undefined && key !== '_id') {
-                product[key] = req.body[key];
+        // Extract fields from request body
+        const {
+            nom,
+            description,
+            prix,
+            stock,
+            categorie,
+            marque,
+            prixOriginal,
+            ingredients,
+            modeEmploi,
+            precautions,
+            enVedette,
+            enPromotion,
+            actif,
+            image
+        } = req.body;
+        
+        // Update fields if provided
+        if (nom !== undefined) product.nom = nom.trim();
+        if (description !== undefined) product.description = description.trim();
+        if (prix !== undefined) {
+            const prixNum = parseFloat(prix);
+            if (isNaN(prixNum) || prixNum < 0) {
+                return res.status(400).json({
+                    message: 'Le prix doit être un nombre positif'
+                });
             }
-        });
+            product.prix = prixNum;
+        }
+        if (stock !== undefined) {
+            const stockNum = parseInt(stock);
+            if (isNaN(stockNum) || stockNum < 0) {
+                return res.status(400).json({
+                    message: 'Le stock doit être un nombre entier positif'
+                });
+            }
+            product.stock = stockNum;
+        }
+        if (categorie !== undefined) product.categorie = categorie;
+        if (marque !== undefined) product.marque = marque ? marque.trim() : '';
+        if (prixOriginal !== undefined) {
+            if (prixOriginal) {
+                const prixOriginalNum = parseFloat(prixOriginal);
+                if (isNaN(prixOriginalNum) || prixOriginalNum < 0) {
+                    return res.status(400).json({
+                        message: 'Le prix original doit être un nombre positif'
+                    });
+                }
+                product.prixOriginal = prixOriginalNum;
+            } else {
+                product.prixOriginal = null;
+            }
+        }
+        if (ingredients !== undefined) product.ingredients = ingredients ? ingredients.trim() : '';
+        if (modeEmploi !== undefined) product.modeEmploi = modeEmploi ? modeEmploi.trim() : '';
+        if (precautions !== undefined) product.precautions = precautions ? precautions.trim() : '';
+        if (enVedette !== undefined) product.enVedette = Boolean(enVedette);
+        if (enPromotion !== undefined) product.enPromotion = Boolean(enPromotion);
+        if (actif !== undefined) product.actif = Boolean(actif);
+        if (image !== undefined) product.image = image || '';
         
         // Recalculate promotion percentage if applicable
         if (product.enPromotion && product.prixOriginal && product.prixOriginal > product.prix) {
@@ -356,7 +494,7 @@ router.patch('/:id/toggle-featured', [auth, requireAdmin], async (req, res) => {
             });
         }
         
-        product.enVedette = enVedette !== undefined ? enVedette : !product.enVedette;
+        product.enVedette = enVedette !== undefined ? Boolean(enVedette) : !product.enVedette;
         await product.save();
         
         console.log(`✅ Product featured status updated: ${product._id} -> ${product.enVedette}`);
@@ -400,18 +538,25 @@ router.patch('/:id/stock', [auth, requireAdmin], async (req, res) => {
             });
         }
         
+        const stockNum = parseInt(stock);
+        if (isNaN(stockNum)) {
+            return res.status(400).json({
+                message: 'Le stock doit être un nombre entier'
+            });
+        }
+        
         switch (operation) {
             case 'set':
-                product.stock = stock;
+                product.stock = Math.max(0, stockNum);
                 break;
             case 'add':
-                product.stock += stock;
+                product.stock += stockNum;
                 break;
             case 'subtract':
-                product.stock = Math.max(0, product.stock - stock);
+                product.stock = Math.max(0, product.stock - stockNum);
                 break;
             default:
-                product.stock = stock;
+                product.stock = Math.max(0, stockNum);
         }
         
         await product.save();

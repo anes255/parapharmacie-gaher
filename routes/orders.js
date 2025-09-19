@@ -1,13 +1,13 @@
 const express = require('express');
 const Order = require('../models/Order');
-const { auth, optionalAuth } = require('../middleware/auth');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 
 // @route   POST /api/orders
 // @desc    Create new order
 // @access  Public
-router.post('/', optionalAuth, async (req, res) => {
+router.post('/', async (req, res) => {
     try {
         console.log('📦 New order creation:', req.body);
         
@@ -19,7 +19,8 @@ router.post('/', optionalAuth, async (req, res) => {
             fraisLivraison,
             total,
             modePaiement,
-            commentaires
+            commentaires,
+            remise
         } = req.body;
         
         // Validation
@@ -35,8 +36,8 @@ router.post('/', optionalAuth, async (req, res) => {
             });
         }
         
-        // Create order
-        const order = new Order({
+        // Prepare order data
+        const orderData = {
             numeroCommande,
             client: {
                 userId: req.user ? req.user.id : null,
@@ -61,7 +62,26 @@ router.post('/', optionalAuth, async (req, res) => {
             modePaiement: modePaiement || 'Paiement à la livraison',
             commentaires: commentaires || '',
             dateCommande: new Date()
-        });
+        };
+
+        // Handle remise field properly
+        if (remise && remise.type && remise.valeur > 0) {
+            orderData.remise = {
+                type: remise.type,
+                valeur: parseFloat(remise.valeur),
+                codePromo: remise.codePromo || ''
+            };
+        } else if (remise && remise.valeur === 0) {
+            // If remise is provided but no discount, only include valeur and codePromo
+            orderData.remise = {
+                valeur: 0,
+                codePromo: remise.codePromo || ''
+            };
+        }
+        // If no remise field provided at all, don't include it in orderData
+        
+        // Create order
+        const order = new Order(orderData);
         
         await order.save();
         console.log('✅ Order created successfully:', order.numeroCommande);

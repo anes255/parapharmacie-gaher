@@ -211,7 +211,7 @@ const OrderSchema = new mongoose.Schema({
         type: {
             type: String,
             enum: ['pourcentage', 'montant'],
-            default: null
+            required: false
         },
         valeur: {
             type: Number,
@@ -263,7 +263,7 @@ OrderSchema.pre('save', function(next) {
         this.total = this.sousTotal + (this.fraisLivraison || 0);
         
         // Appliquer la remise si applicable
-        if (this.remise && this.remise.valeur > 0) {
+        if (this.remise && this.remise.type && this.remise.valeur > 0) {
             if (this.remise.type === 'pourcentage') {
                 const reduction = this.sousTotal * (this.remise.valeur / 100);
                 this.total = Math.max(0, this.total - reduction);
@@ -333,7 +333,7 @@ OrderSchema.methods.calculerTotal = function() {
     this.total = this.sousTotal + (this.fraisLivraison || 0);
     
     // Appliquer la remise
-    if (this.remise && this.remise.valeur > 0) {
+    if (this.remise && this.remise.type && this.remise.valeur > 0) {
         if (this.remise.type === 'pourcentage') {
             const reduction = this.sousTotal * (this.remise.valeur / 100);
             this.total = Math.max(0, this.total - reduction);

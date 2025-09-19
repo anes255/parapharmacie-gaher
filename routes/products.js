@@ -4,9 +4,9 @@ const { auth, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
-// @route   GET /api/products
-// @desc    Get all products with filters and pagination
-// @access  Public
+// PUBLIC ROUTES (no auth required)
+
+// Obtenir tous les produits avec filtres et pagination
 router.get('/', async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
         
         let query = { actif: true };
         
-        // Filters
+        // Filtres
         if (req.query.categorie) {
             query.categorie = req.query.categorie;
         }
@@ -42,7 +42,7 @@ router.get('/', async (req, res) => {
             query.enVedette = true;
         }
         
-        // Sort
+        // Tri
         let sort = {};
         switch (req.query.sort) {
             case 'price_asc':
@@ -72,6 +72,8 @@ router.get('/', async (req, res) => {
         const total = await Product.countDocuments(query);
         const totalPages = Math.ceil(total / limit);
         
+        console.log(`✅ Products retrieved: ${products.length}/${total} total`);
+        
         res.json({
             products,
             pagination: {
@@ -84,47 +86,129 @@ router.get('/', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Get products error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des produits' 
-        });
+        console.error('Erreur récupération produits:', error);
+        res.status(500).json({ message: 'Erreur serveur lors de la récupération des produits' });
     }
 });
 
-// @route   GET /api/products/:id
-// @desc    Get product by ID
-// @access  Public
+// Obtenir un produit par ID
 router.get('/:id', async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         
         if (!product) {
-            return res.status(404).json({ 
-                message: 'Produit non trouvé' 
-            });
+            return res.status(404).json({ message: 'Produit non trouvé' });
         }
         
         res.json(product);
         
     } catch (error) {
-        console.error('❌ Get product error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération du produit' 
-        });
+        console.error('Erreur récupération produit:', error);
+        if (error.name === 'CastError') {
+            return res.status(400).json({ message: 'ID de produit invalide' });
+        }
+        res.status(500).json({ message: 'Erreur serveur' });
     }
 });
+
+// Obtenir les catégories
+router.get('/categories/all', async (req, res) => {
+    try {
+        const categories = await Product.distinct('categorie', { actif: true });
+        
+        const categoriesInfo = [
+            { nom: 'Vitalité', description: 'Vitamines et suppléments alimentaires', icon: 'fa-seedling' },
+            { nom: 'Sport', description: 'Nutrition sportive', icon: 'fa-dumbbell' },
+            { nom: 'Cheveux', description: 'Soins capillaires', icon: 'fa-cut' },
+            { nom: 'Visage', description: 'Soins du visage', icon: 'fa-smile' },
+            { nom: 'Intime', description: 'Hygiène intime', icon: 'fa-heart' },
+            { nom: 'Solaire', description: 'Protection solaire', icon: 'fa-sun' },
+            { nom: 'Soins', description: 'Soins corporels', icon: 'fa-spa' },
+            { nom: 'Bébé', description: 'Soins pour bébés', icon: 'fa-baby-carriage' },
+            { nom: 'Homme', description: 'Soins pour hommes', icon: 'fa-user-tie' },
+            { nom: 'Dentaire', description: 'Hygiène dentaire', icon: 'fa-tooth' }
+        ];
+        
+        // Only return categories that have products
+        const availableCategories = categoriesInfo.filter(cat => 
+            categories.includes(cat.nom)
+        );
+        
+        res.json(availableCategories);
+        
+    } catch (error) {
+        console.error('Erreur récupération catégories:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// Obtenir les produits en vedette
+router.get('/featured/all', async (req, res) => {
+    try {
+        const products = await Product.find({ 
+            enVedette: true, 
+            actif: true 
+        })
+        .limit(8)
+        .sort({ dateAjout: -1 });
+        
+        console.log(`✅ Featured products: ${products.length}`);
+        res.json(products);
+        
+    } catch (error) {
+        console.error('Erreur produits vedette:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// Obtenir les produits en promotion
+router.get('/promotions/all', async (req, res) => {
+    try {
+        const products = await Product.find({ 
+            enPromotion: true, 
+            actif: true 
+        })
+        .limit(8)
+        .sort({ dateAjout: -1 });
+        
+        console.log(`✅ Promotion products: ${products.length}`);
+        res.json(products);
+        
+    } catch (error) {
+        console.error('Erreur produits promotion:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// ADMIN ROUTES (require authentication and admin role)
 
 // @route   POST /api/products
 // @desc    Create new product (Admin only)
 // @access  Private/Admin
-router.post('/', auth, requireAdmin, async (req, res) => {
+router.post('/', [auth, requireAdmin], async (req, res) => {
     try {
         console.log('📦 Creating new product:', req.body.nom);
+        
+        // Validate required fields
+        const { nom, description, prix, stock, categorie } = req.body;
+        
+        if (!nom || !description || !prix || stock === undefined || !categorie) {
+            return res.status(400).json({
+                message: 'Champs obligatoires manquants: nom, description, prix, stock, catégorie'
+            });
+        }
         
         const productData = {
             ...req.body,
             dateAjout: new Date()
         };
+        
+        // Calculate promotion percentage if applicable
+        if (productData.enPromotion && productData.prixOriginal && productData.prixOriginal > productData.prix) {
+            productData.pourcentagePromotion = Math.round(
+                ((productData.prixOriginal - productData.prix) / productData.prixOriginal) * 100
+            );
+        }
         
         const product = new Product(productData);
         await product.save();
@@ -142,7 +226,8 @@ router.post('/', auth, requireAdmin, async (req, res) => {
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
             return res.status(400).json({
-                message: messages[0] || 'Données de produit invalides'
+                message: messages[0] || 'Données de produit invalides',
+                errors: messages
             });
         }
         
@@ -155,7 +240,7 @@ router.post('/', auth, requireAdmin, async (req, res) => {
 // @route   PUT /api/products/:id
 // @desc    Update product (Admin only)
 // @access  Private/Admin
-router.put('/:id', auth, requireAdmin, async (req, res) => {
+router.put('/:id', [auth, requireAdmin], async (req, res) => {
     try {
         console.log('📦 Updating product:', req.params.id);
         
@@ -169,10 +254,19 @@ router.put('/:id', auth, requireAdmin, async (req, res) => {
         
         // Update product with new data
         Object.keys(req.body).forEach(key => {
-            if (req.body[key] !== undefined) {
+            if (req.body[key] !== undefined && key !== '_id') {
                 product[key] = req.body[key];
             }
         });
+        
+        // Recalculate promotion percentage if applicable
+        if (product.enPromotion && product.prixOriginal && product.prixOriginal > product.prix) {
+            product.pourcentagePromotion = Math.round(
+                ((product.prixOriginal - product.prix) / product.prixOriginal) * 100
+            );
+        } else if (!product.enPromotion) {
+            product.pourcentagePromotion = 0;
+        }
         
         await product.save();
         
@@ -189,7 +283,14 @@ router.put('/:id', auth, requireAdmin, async (req, res) => {
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
             return res.status(400).json({
-                message: messages[0] || 'Données de produit invalides'
+                message: messages[0] || 'Données de produit invalides',
+                errors: messages
+            });
+        }
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({
+                message: 'ID de produit invalide'
             });
         }
         
@@ -202,7 +303,7 @@ router.put('/:id', auth, requireAdmin, async (req, res) => {
 // @route   DELETE /api/products/:id
 // @desc    Delete product (Admin only)
 // @access  Private/Admin
-router.delete('/:id', auth, requireAdmin, async (req, res) => {
+router.delete('/:id', [auth, requireAdmin], async (req, res) => {
     try {
         console.log('📦 Deleting product:', req.params.id);
         
@@ -219,98 +320,34 @@ router.delete('/:id', auth, requireAdmin, async (req, res) => {
         console.log('✅ Product deleted successfully:', req.params.id);
         
         res.json({
-            message: 'Produit supprimé avec succès'
+            message: 'Produit supprimé avec succès',
+            productId: req.params.id
         });
         
     } catch (error) {
         console.error('❌ Product deletion error:', error);
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({
+                message: 'ID de produit invalide'
+            });
+        }
+        
         res.status(500).json({
             message: 'Erreur lors de la suppression du produit'
         });
     }
 });
 
-// @route   GET /api/products/categories/all
-// @desc    Get all categories
-// @access  Public
-router.get('/categories/all', async (req, res) => {
-    try {
-        const categories = await Product.distinct('categorie');
-        
-        const categoriesInfo = [
-            { nom: 'Cheveux', description: 'Soins capillaires' },
-            { nom: 'Intime', description: 'Hygiène intime' },
-            { nom: 'Solaire', description: 'Protection solaire' },
-            { nom: 'Maman', description: 'Soins pour mamans' },
-            { nom: 'Bébé', description: 'Soins pour bébés' },
-            { nom: 'Visage', description: 'Soins du visage' },
-            { nom: 'Minceur', description: 'Produits minceur' },
-            { nom: 'Homme', description: 'Soins pour hommes' },
-            { nom: 'Soins', description: 'Soins généraux' },
-            { nom: 'Dentaire', description: 'Hygiène dentaire' },
-            { nom: 'Vitalité', description: 'Vitamines et suppléments alimentaires' },
-            { nom: 'Sport', description: 'Nutrition sportive' }
-        ];
-        
-        res.json(categoriesInfo);
-        
-    } catch (error) {
-        console.error('❌ Get categories error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des catégories' 
-        });
-    }
-});
-
-// @route   GET /api/products/featured/all
-// @desc    Get featured products
-// @access  Public
-router.get('/featured/all', async (req, res) => {
-    try {
-        const products = await Product.find({ 
-            enVedette: true, 
-            actif: true 
-        })
-        .limit(8)
-        .sort({ dateAjout: -1 });
-        
-        res.json(products);
-        
-    } catch (error) {
-        console.error('❌ Get featured products error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des produits vedette' 
-        });
-    }
-});
-
-// @route   GET /api/products/promotions/all
-// @desc    Get products on promotion
-// @access  Public
-router.get('/promotions/all', async (req, res) => {
-    try {
-        const products = await Product.find({ 
-            enPromotion: true, 
-            actif: true 
-        })
-        .limit(8)
-        .sort({ dateAjout: -1 });
-        
-        res.json(products);
-        
-    } catch (error) {
-        console.error('❌ Get promotion products error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des produits en promotion' 
-        });
-    }
-});
-
-// @route   PUT /api/products/:id/toggle-featured
+// @route   PATCH /api/products/:id/toggle-featured
 // @desc    Toggle featured status (Admin only)
 // @access  Private/Admin
-router.put('/:id/toggle-featured', auth, requireAdmin, async (req, res) => {
+router.patch('/:id/toggle-featured', [auth, requireAdmin], async (req, res) => {
     try {
+        console.log('⭐ Toggling featured status for product:', req.params.id);
+        
+        const { enVedette } = req.body;
+        
         const product = await Product.findById(req.params.id);
         
         if (!product) {
@@ -319,28 +356,41 @@ router.put('/:id/toggle-featured', auth, requireAdmin, async (req, res) => {
             });
         }
         
-        product.enVedette = !product.enVedette;
+        product.enVedette = enVedette !== undefined ? enVedette : !product.enVedette;
         await product.save();
         
+        console.log(`✅ Product featured status updated: ${product._id} -> ${product.enVedette}`);
+        
         res.json({
-            message: `Produit ${product.enVedette ? 'ajouté aux' : 'retiré des'} coups de coeur`,
-            product
+            message: `Produit ${product.enVedette ? 'ajouté aux' : 'retiré des'} coups de cœur`,
+            product: {
+                _id: product._id,
+                nom: product.nom,
+                enVedette: product.enVedette
+            }
         });
         
     } catch (error) {
         console.error('❌ Toggle featured error:', error);
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({
+                message: 'ID de produit invalide'
+            });
+        }
+        
         res.status(500).json({
-            message: 'Erreur lors de la modification du statut vedette'
+            message: 'Erreur lors de la modification'
         });
     }
 });
 
-// @route   PUT /api/products/:id/toggle-promotion
-// @desc    Toggle promotion status (Admin only)
+// @route   PATCH /api/products/:id/stock
+// @desc    Update product stock (Admin only)
 // @access  Private/Admin
-router.put('/:id/toggle-promotion', auth, requireAdmin, async (req, res) => {
+router.patch('/:id/stock', [auth, requireAdmin], async (req, res) => {
     try {
-        const { enPromotion, prixOriginal, pourcentagePromotion } = req.body;
+        const { stock, operation } = req.body; // operation can be 'set', 'add', 'subtract'
         
         const product = await Product.findById(req.params.id);
         
@@ -350,77 +400,37 @@ router.put('/:id/toggle-promotion', auth, requireAdmin, async (req, res) => {
             });
         }
         
-        product.enPromotion = enPromotion;
-        
-        if (enPromotion) {
-            if (prixOriginal) {
-                product.prixOriginal = prixOriginal;
-            }
-            if (pourcentagePromotion) {
-                product.pourcentagePromotion = pourcentagePromotion;
-            }
-        } else {
-            product.prixOriginal = null;
-            product.pourcentagePromotion = 0;
+        switch (operation) {
+            case 'set':
+                product.stock = stock;
+                break;
+            case 'add':
+                product.stock += stock;
+                break;
+            case 'subtract':
+                product.stock = Math.max(0, product.stock - stock);
+                break;
+            default:
+                product.stock = stock;
         }
         
         await product.save();
         
+        console.log(`✅ Product stock updated: ${product._id} -> ${product.stock}`);
+        
         res.json({
-            message: `Promotion ${enPromotion ? 'activée' : 'désactivée'}`,
-            product
-        });
-        
-    } catch (error) {
-        console.error('❌ Toggle promotion error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la modification de la promotion'
-        });
-    }
-});
-
-// @route   GET /api/products/search/suggestions
-// @desc    Get search suggestions
-// @access  Public
-router.get('/search/suggestions', async (req, res) => {
-    try {
-        const { q } = req.query;
-        
-        if (!q || q.length < 2) {
-            return res.json([]);
-        }
-        
-        const suggestions = await Product.find({
-            actif: true,
-            $or: [
-                { nom: { $regex: q, $options: 'i' } },
-                { marque: { $regex: q, $options: 'i' } },
-                { categorie: { $regex: q, $options: 'i' } }
-            ]
-        })
-        .select('nom marque categorie')
-        .limit(5);
-        
-        const uniqueSuggestions = [];
-        const seen = new Set();
-        
-        suggestions.forEach(product => {
-            if (!seen.has(product.nom)) {
-                uniqueSuggestions.push({
-                    type: 'product',
-                    text: product.nom,
-                    category: product.categorie
-                });
-                seen.add(product.nom);
+            message: 'Stock mis à jour avec succès',
+            product: {
+                _id: product._id,
+                nom: product.nom,
+                stock: product.stock
             }
         });
         
-        res.json(uniqueSuggestions);
-        
     } catch (error) {
-        console.error('❌ Search suggestions error:', error);
-        res.status(500).json({ 
-            message: 'Erreur lors de la récupération des suggestions' 
+        console.error('❌ Stock update error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour du stock'
         });
     }
 });

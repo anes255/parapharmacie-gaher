@@ -19,8 +19,7 @@ router.post('/', async (req, res) => {
             fraisLivraison,
             total,
             modePaiement,
-            commentaires,
-            remise
+            commentaires
         } = req.body;
         
         // Validation
@@ -36,8 +35,8 @@ router.post('/', async (req, res) => {
             });
         }
         
-        // Prepare order data
-        const orderData = {
+        // Create order
+        const order = new Order({
             numeroCommande,
             client: {
                 userId: req.user ? req.user.id : null,
@@ -62,26 +61,7 @@ router.post('/', async (req, res) => {
             modePaiement: modePaiement || 'Paiement à la livraison',
             commentaires: commentaires || '',
             dateCommande: new Date()
-        };
-
-        // Handle remise field properly
-        if (remise && remise.type && remise.valeur > 0) {
-            orderData.remise = {
-                type: remise.type,
-                valeur: parseFloat(remise.valeur),
-                codePromo: remise.codePromo || ''
-            };
-        } else if (remise && remise.valeur === 0) {
-            // If remise is provided but no discount, only include valeur and codePromo
-            orderData.remise = {
-                valeur: 0,
-                codePromo: remise.codePromo || ''
-            };
-        }
-        // If no remise field provided at all, don't include it in orderData
-        
-        // Create order
-        const order = new Order(orderData);
+        });
         
         await order.save();
         console.log('✅ Order created successfully:', order.numeroCommande);
@@ -109,6 +89,69 @@ router.post('/', async (req, res) => {
         
         res.status(500).json({
             message: 'Erreur serveur lors de la création de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders
+// @desc    Get all orders (Admin only)
+// @access  Private/Admin
+router.get('/', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        console.log('📦 Admin getting all orders');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        // Filter by status
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Filter by date range
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                query.dateCommande.$lte = new Date(req.query.dateTo);
+            }
+        }
+        
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get all orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
         });
     }
 });
@@ -230,69 +273,6 @@ router.put('/:id', auth, async (req, res) => {
         console.error('❌ Update order error:', error);
         res.status(500).json({
             message: 'Erreur lors de la mise à jour de la commande'
-        });
-    }
-});
-
-// @route   GET /api/orders
-// @desc    Get all orders (Admin only)
-// @access  Private/Admin
-router.get('/', auth, async (req, res) => {
-    try {
-        // Check if user is admin
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({
-                message: 'Accès administrateur requis'
-            });
-        }
-        
-        console.log('📦 Admin getting all orders');
-        
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
-        
-        // Filter by status
-        if (req.query.statut) {
-            query.statut = req.query.statut;
-        }
-        
-        // Filter by date range
-        if (req.query.dateFrom || req.query.dateTo) {
-            query.dateCommande = {};
-            if (req.query.dateFrom) {
-                query.dateCommande.$gte = new Date(req.query.dateFrom);
-            }
-            if (req.query.dateTo) {
-                query.dateCommande.$lte = new Date(req.query.dateTo);
-            }
-        }
-        
-        const orders = await Order.find(query)
-            .sort({ dateCommande: -1 })
-            .skip(skip)
-            .limit(limit);
-            
-        const total = await Order.countDocuments(query);
-        const totalPages = Math.ceil(total / limit);
-        
-        res.json({
-            orders,
-            pagination: {
-                currentPage: page,
-                totalPages,
-                totalOrders: total,
-                hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Get all orders error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des commandes'
         });
     }
 });

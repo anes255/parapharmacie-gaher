@@ -6,17 +6,20 @@ require('dotenv').config();
 
 const app = express();
 
-// CORS configuration - FIXED
+console.log('🚀 Starting Shifa Parapharmacie Server...');
+
+// CORS configuration
 const corsOptions = {
     origin: [
         'http://localhost:3000',
-        'http://localhost:3001',
+        'http://localhost:3001', 
         'http://127.0.0.1:3000',
         'http://127.0.0.1:3001',
         'http://localhost:5173',
         'https://parapharmacieshifa.com',
         'http://parapharmacieshifa.com',
-        'https://parapharmacie-gaher.onrender.com'
+        // Add your frontend domain here
+        'https://your-frontend-domain.com'
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -37,10 +40,11 @@ app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging
+// Request logging middleware
 app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-    if (req.body && Object.keys(req.body).length > 0) {
+    const timestamp = new Date().toISOString();
+    console.log(`${timestamp} - ${req.method} ${req.path}`);
+    if (req.method === 'POST' || req.method === 'PUT') {
         console.log('Request body keys:', Object.keys(req.body));
     }
     next();
@@ -52,14 +56,7 @@ app.get('/', (req, res) => {
         message: 'Shifa Parapharmacie Backend API',
         status: 'running',
         timestamp: new Date().toISOString(),
-        endpoints: {
-            health: '/api/health',
-            auth: '/api/auth',
-            products: '/api/products',
-            admin: '/api/admin',
-            orders: '/api/orders',
-            settings: '/api/settings'
-        }
+        version: '1.0.0'
     });
 });
 
@@ -73,68 +70,117 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// DIRECT ROUTE LOADING
+// Debug route
+app.get('/api/debug', (req, res) => {
+    res.json({
+        message: 'Debug endpoint working',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development',
+        mongoState: mongoose.connection.readyState,
+        routes: {
+            auth: '/api/auth/*',
+            products: '/api/products/*', 
+            orders: '/api/orders/*',
+            admin: '/api/admin/*',
+            settings: '/api/settings/*'
+        }
+    });
+});
+
+// Load routes with error handling
+console.log('📝 Loading routes...');
+
+// Auth routes
 try {
     const authRoutes = require('./routes/auth');
     app.use('/api/auth', authRoutes);
-    console.log('✅ Auth routes loaded');
+    console.log('✅ Auth routes loaded successfully');
 } catch (error) {
-    console.error('❌ Auth routes failed:', error.message);
+    console.error('❌ Failed to load auth routes:', error.message);
+    console.error(error.stack);
 }
 
+// Product routes  
 try {
     const productRoutes = require('./routes/products');
     app.use('/api/products', productRoutes);
-    console.log('✅ Product routes loaded');
+    console.log('✅ Product routes loaded successfully');
 } catch (error) {
-    console.error('❌ Product routes failed:', error.message);
+    console.error('❌ Failed to load product routes:', error.message);
+    console.error(error.stack);
 }
 
+// Order routes
 try {
     const orderRoutes = require('./routes/orders');
     app.use('/api/orders', orderRoutes);
-    console.log('✅ Order routes loaded');
+    console.log('✅ Order routes loaded successfully');
 } catch (error) {
-    console.error('❌ Order routes failed:', error.message);
+    console.error('❌ Failed to load order routes:', error.message);
+    console.error(error.stack);
+    
+    // Fallback routes if order routes fail
+    app.get('/api/orders/test', (req, res) => {
+        res.json({ message: 'Fallback orders test route', error: error.message });
+    });
+    
+    app.get('/api/orders', (req, res) => {
+        res.status(500).json({ 
+            message: 'Orders routes failed to load', 
+            error: error.message,
+            orders: []
+        });
+    });
 }
 
+// Admin routes
 try {
     const adminRoutes = require('./routes/admin');
     app.use('/api/admin', adminRoutes);
-    console.log('✅ Admin routes loaded');
+    console.log('✅ Admin routes loaded successfully');
 } catch (error) {
-    console.error('❌ Admin routes failed:', error.message);
+    console.error('❌ Failed to load admin routes:', error.message);
+    console.error(error.stack);
 }
 
+// Settings routes
 try {
     const settingsRoutes = require('./routes/settings');
     app.use('/api/settings', settingsRoutes);
-    console.log('✅ Settings routes loaded');
+    console.log('✅ Settings routes loaded successfully');
 } catch (error) {
-    console.error('❌ Settings routes failed:', error.message);
+    console.error('❌ Failed to load settings routes:', error.message);
+    console.error(error.stack);
 }
 
-// MongoDB Connection
+// MongoDB Connection with retry logic
 const connectDB = async () => {
     try {
-        console.log('Connecting to MongoDB...');
+        console.log('🔌 Connecting to MongoDB...');
         
         if (!process.env.MONGODB_URI) {
-            throw new Error('MONGODB_URI not set');
+            throw new Error('MONGODB_URI environment variable is not set');
         }
         
-        await mongoose.connect(process.env.MONGODB_URI, {
+        const connectionOptions = {
             useNewUrlParser: true,
-            useUnifiedTopology: true
-        });
+            useUnifiedTopology: true,
+            maxPoolSize: 10,
+            serverSelectionTimeoutMS: 5000,
+            socketTimeoutMS: 45000,
+        };
         
-        console.log('✅ MongoDB connected');
+        await mongoose.connect(process.env.MONGODB_URI, connectionOptions);
         
-        // Initialize admin user
+        console.log('✅ MongoDB connected successfully');
+        console.log('📍 Database:', mongoose.connection.name);
+        
+        // Initialize admin user after successful connection
         await initializeAdmin();
         
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error.message);
+        console.log('🔄 Retrying connection in 10 seconds...');
         setTimeout(connectDB, 10000);
     }
 };
@@ -142,13 +188,19 @@ const connectDB = async () => {
 // Initialize admin user
 async function initializeAdmin() {
     try {
+        console.log('👤 Checking admin user...');
+        
         const User = require('./models/User');
         const bcrypt = require('bcryptjs');
         
+        // Check if admin exists
         let admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
+        
         if (!admin) {
-            const salt = bcrypt.genSaltSync(12);
-            const hashedPassword = bcrypt.hashSync('anesaya75', salt);
+            console.log('👤 Creating admin user...');
+            
+            const salt = await bcrypt.genSalt(12);
+            const hashedPassword = await bcrypt.hash('anesaya75', salt);
             
             admin = new User({
                 nom: 'Gaher',
@@ -160,159 +212,95 @@ async function initializeAdmin() {
                 password: hashedPassword,
                 role: 'admin',
                 actif: true,
-                emailVerifie: true
+                dateInscription: new Date(),
+                dernierConnexion: new Date()
             });
             
             await admin.save();
-            console.log('✅ Admin user created');
+            console.log('✅ Admin user created successfully');
         } else {
             console.log('✅ Admin user already exists');
         }
+        
+        // Update admin's last connection
+        admin.dernierConnexion = new Date();
+        await admin.save();
+        
     } catch (error) {
-        console.log('Admin creation skipped:', error.message);
+        console.error('❌ Admin user initialization failed:', error.message);
+        console.error('This is not critical, server will continue...');
     }
 }
 
-// Error handling middleware
+// Global error handling middleware
 app.use((error, req, res, next) => {
-    console.error('Server error:', error);
+    console.error('💥 Global error handler:', error);
+    console.error('Error stack:', error.stack);
     
-    // Handle specific error types
-    if (error.name === 'ValidationError') {
-        const messages = Object.values(error.errors).map(err => err.message);
-        return res.status(400).json({ 
-            message: messages[0] || 'Données invalides',
-            errors: messages
-        });
-    }
-    
-    if (error.name === 'CastError') {
-        return res.status(400).json({ 
-            message: 'Format d\'ID invalide' 
-        });
-    }
-    
-    if (error.code === 11000) {
-        const field = Object.keys(error.keyPattern)[0];
-        return res.status(400).json({ 
-            message: `${field} déjà utilisé` 
-        });
-    }
-    
-    res.status(error.status || 500).json({ 
-        message: error.message || 'Erreur serveur',
-        timestamp: new Date().toISOString()
+    res.status(500).json({ 
+        message: 'Internal server error',
+        timestamp: new Date().toISOString(),
+        ...(process.env.NODE_ENV === 'development' && { error: error.message })
     });
 });
 
-// 404 handler
+// 404 handler for unmatched routes
 app.use('*', (req, res) => {
     console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
     res.status(404).json({
-        message: 'Route non trouvée',
+        message: 'Route not found',
         path: req.originalUrl,
         method: req.method,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        availableRoutes: {
+            health: '/api/health',
+            debug: '/api/debug',
+            auth: '/api/auth/*',
+            products: '/api/products/*',
+            orders: '/api/orders/*',
+            admin: '/api/admin/*'
+        }
     });
 });
 
-// Connect to database
+// Database connection
 connectDB();
+
+// Graceful shutdown handlers
+process.on('SIGTERM', () => {
+    console.log('💀 SIGTERM received, shutting down gracefully...');
+    mongoose.connection.close(() => {
+        console.log('✅ MongoDB connection closed');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('💀 SIGINT received, shutting down gracefully...');
+    mongoose.connection.close(() => {
+        console.log('✅ MongoDB connection closed');
+        process.exit(0);
+    });
+});
+
+// Unhandled promise rejection handler
+process.on('unhandledRejection', (err) => {
+    console.error('💥 Unhandled Promise Rejection:', err);
+    console.error('💀 Shutting down server...');
+    process.exit(1);
+});
 
 // Start server
 const PORT = process.env.PORT || 5000;
+
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Health: http://localhost:${PORT}/api/health`);
-    console.log(`🔗 API Root: http://localhost:${PORT}/api`);
+    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🔗 Debug: http://localhost:${PORT}/api/debug`);
+    console.log(`📊 API Base: http://localhost:${PORT}/api`);
+    console.log('✅ Server startup completed');
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('SIGTERM signal received: closing HTTP server');
-    server.close(() => {
-        console.log('HTTP server closed');
-        mongoose.connection.close(false, () => {
-            console.log('MongoDB connection closed');
-            process.exit(0);
-        });
-    });
-});
-// Add this debugging code to your server.js file
-console.log('🔧 DEBUG: Starting route loading diagnostics...');
-
-// Test if orders.js file can be required at all
-try {
-    console.log('🔧 DEBUG: Testing require of orders.js...');
-    const ordersRoutes = require('./routes/orders');
-    console.log('🔧 DEBUG: ✅ orders.js required successfully');
-    console.log('🔧 DEBUG: Type of ordersRoutes:', typeof ordersRoutes);
-    
-    // Try to mount the routes
-    console.log('🔧 DEBUG: Attempting to mount /api/orders routes...');
-    app.use('/api/orders', ordersRoutes);
-    console.log('🔧 DEBUG: ✅ /api/orders routes mounted successfully');
-    
-} catch (error) {
-    console.error('🔧 DEBUG: ❌ CRITICAL: Failed to load orders routes');
-    console.error('🔧 DEBUG: Error message:', error.message);
-    console.error('🔧 DEBUG: Error stack:', error.stack);
-    
-    // Create a fallback route to at least respond
-    app.get('/api/orders/fallback', (req, res) => {
-        res.json({
-            error: 'Orders routes failed to load',
-            message: error.message,
-            timestamp: new Date().toISOString()
-        });
-    });
-}
-
-// Test if auth routes are working
-try {
-    console.log('🔧 DEBUG: Testing auth routes...');
-    const authRoutes = require('./routes/auth');
-    console.log('🔧 DEBUG: ✅ Auth routes loaded successfully');
-} catch (error) {
-    console.error('🔧 DEBUG: ❌ Auth routes failed:', error.message);
-}
-
-// Add a debug route to test if server is responding
-app.get('/api/debug', (req, res) => {
-    console.log('🔧 DEBUG: Debug route accessed');
-    res.json({
-        message: 'Server debug route working',
-        timestamp: new Date().toISOString(),
-        routes: {
-            orders: 'should be at /api/orders',
-            ordersTest: 'should be at /api/orders/test',
-            ordersDebug: 'should be at /api/orders/debug-status'
-        }
-    });
-});
-
-// List all registered routes for debugging
-console.log('🔧 DEBUG: Listing all registered routes...');
-app._router.stack.forEach(function(r, index) {
-    if (r.route && r.route.path) {
-        console.log(`🔧 DEBUG: Route ${index}: ${r.route.path}`);
-    } else if (r.name === 'router') {
-        console.log(`🔧 DEBUG: Router ${index}: ${r.regexp}`);
-        if (r.handle && r.handle.stack) {
-            r.handle.stack.forEach(function(rr, subIndex) {
-                if (rr.route && rr.route.path) {
-                    console.log(`🔧 DEBUG:   Sub-route ${subIndex}: ${rr.route.path}`);
-                }
-            });
-        }
-    }
-});
-
-console.log('🔧 DEBUG: Route loading diagnostics completed');
-
-// Add this at the very end of your server.js, just before app.listen()
-console.log('🔧 DEBUG: Server setup completed, starting server...'); 
-
+// Export app for testing
 module.exports = app;
-

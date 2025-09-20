@@ -66,6 +66,27 @@ const UserSchema = new mongoose.Schema({
     dernierConnexion: {
         type: Date,
         default: Date.now
+    },
+    preferences: {
+        newsletter: {
+            type: Boolean,
+            default: true
+        },
+        notifications: {
+            email: {
+                type: Boolean,
+                default: true
+            },
+            sms: {
+                type: Boolean,
+                default: false
+            }
+        },
+        langue: {
+            type: String,
+            enum: ['fr', 'ar', 'en'],
+            default: 'fr'
+        }
     }
 }, {
     timestamps: true
@@ -88,13 +109,19 @@ UserSchema.pre('save', async function(next) {
     }
 });
 
-// Méthode pour comparer les mots de passe
-UserSchema.methods.comparerMotDePasse = async function(motDePasseCandidat) {
+// Méthode pour comparer les mots de passe (nom utilisé par auth.js)
+UserSchema.methods.comparePassword = async function(motDePasseCandidat) {
     return await bcrypt.compare(motDePasseCandidat, this.password);
 };
 
+// Méthode pour mettre à jour la dernière connexion (utilisée par auth.js)
+UserSchema.methods.updateLastConnection = async function() {
+    this.dernierConnexion = new Date();
+    return await this.save();
+};
+
 // Alternative method name for compatibility
-UserSchema.methods.comparePassword = async function(motDePasseCandidat) {
+UserSchema.methods.comparerMotDePasse = async function(motDePasseCandidat) {
     return await bcrypt.compare(motDePasseCandidat, this.password);
 };
 

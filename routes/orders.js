@@ -1,301 +1,258 @@
-const jwt = require('jsonwebtoken');
+const express = require('express');
+const { auth } = require('../middleware/auth');
 
-// Middleware d'authentification
-const auth = async (req, res, next) => {
+const router = express.Router();
+
+// Test route to verify router is working
+router.get('/test', (req, res) => {
+    res.json({ message: 'Orders route is working!' });
+});
+
+// @route   GET /api/orders
+// @desc    Get all orders (Admin only) 
+// @access  Private/Admin
+router.get('/', auth, async (req, res) => {
     try {
-        // Récupérer le token depuis l'en-tête
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
+        console.log('📦 Admin accessing orders, user:', req.user);
         
-        // Vérifier si le token existe
-        if (!token) {
-            return res.status(401).json({
-                message: 'Accès refusé. Token manquant.'
-            });
-        }
-        
-        try {
-            // Vérifier et décoder le token
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-            
-            try {
-                // Try to get User model
-                const User = require('../models/User');
-                
-                // Récupérer l'utilisateur depuis la base de données
-                const user = await User.findById(decoded.id);
-                
-                if (!user) {
-                    return res.status(401).json({
-                        message: 'Token invalide. Utilisateur non trouvé.'
-                    });
-                }
-                
-                if (!user.actif) {
-                    return res.status(401).json({
-                        message: 'Compte désactivé.'
-                    });
-                }
-                
-                // Ajouter l'utilisateur à la requête
-                req.user = {
-                    id: user._id,
-                    email: user.email,
-                    nom: user.nom,
-                    prenom: user.prenom,
-                    role: user.role,
-                    actif: user.actif
-                };
-                
-                next();
-                
-            } catch (dbError) {
-                console.error('Database error in auth:', dbError.message);
-                
-                // Fallback to token data if database unavailable
-                req.user = {
-                    id: decoded.id,
-                    email: decoded.email,
-                    nom: decoded.nom || '',
-                    prenom: decoded.prenom || '',
-                    role: decoded.role || 'user',
-                    actif: true
-                };
-                
-                next();
-            }
-            
-        } catch (jwtError) {
-            console.error('JWT Error:', jwtError.message);
-            
-            if (jwtError.name === 'TokenExpiredError') {
-                return res.status(401).json({
-                    message: 'Token expiré. Veuillez vous reconnecter.'
-                });
-            } else if (jwtError.name === 'JsonWebTokenError') {
-                return res.status(401).json({
-                    message: 'Token invalide.'
-                });
-            } else {
-                return res.status(401).json({
-                    message: 'Erreur de vérification du token.'
-                });
-            }
-        }
-        
-    } catch (error) {
-        console.error('Auth middleware error:', error);
-        res.status(500).json({
-            message: 'Erreur serveur lors de l\'authentification'
-        });
-    }
-};
-
-// Middleware optionnel d'authentification (ne rejette pas si pas de token)
-const optionalAuth = async (req, res, next) => {
-    try {
-        const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (!token) {
-            // Pas de token, continuer sans utilisateur
-            req.user = null;
-            return next();
-        }
-        
-        try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-            
-            try {
-                const User = require('../models/User');
-                const user = await User.findById(decoded.id);
-                
-                if (user && user.actif) {
-                    req.user = {
-                        id: user._id,
-                        email: user.email,
-                        nom: user.nom,
-                        prenom: user.prenom,
-                        role: user.role,
-                        actif: user.actif
-                    };
-                } else {
-                    req.user = null;
-                }
-            } catch (dbError) {
-                // Use token data if DB is unavailable
-                req.user = {
-                    id: decoded.id,
-                    email: decoded.email,
-                    nom: decoded.nom || '',
-                    prenom: decoded.prenom || '',
-                    role: decoded.role || 'user',
-                    actif: true
-                };
-            }
-        } catch (jwtError) {
-            // Token invalide, continuer sans utilisateur
-            req.user = null;
-        }
-        
-        next();
-        
-    } catch (error) {
-        console.error('Optional auth middleware error:', error);
-        req.user = null;
-        next();
-    }
-};
-
-// Middleware pour vérifier le rôle admin
-const requireAdmin = (req, res, next) => {
-    if (!req.user) {
-        return res.status(401).json({
-            message: 'Authentification requise'
-        });
-    }
-    
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({
-            message: 'Accès refusé. Droits administrateur requis.'
-        });
-    }
-    
-    next();
-};
-
-// Middleware pour vérifier que l'utilisateur peut accéder à une ressource
-const requireOwnershipOrAdmin = (resourceUserIdField = 'userId') => {
-    return (req, res, next) => {
-        if (!req.user) {
-            return res.status(401).json({
-                message: 'Authentification requise'
-            });
-        }
-        
-        // L'admin peut accéder à tout
-        if (req.user.role === 'admin') {
-            return next();
-        }
-        
-        // Vérifier la propriété de la ressource
-        const resourceUserId = req.params[resourceUserIdField] || req.body[resourceUserIdField];
-        
-        if (!resourceUserId) {
-            return res.status(400).json({
-                message: 'ID utilisateur manquant dans la requête'
-            });
-        }
-        
-        if (resourceUserId !== req.user.id.toString()) {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
             return res.status(403).json({
-                message: 'Accès refusé. Vous ne pouvez accéder qu\'à vos propres ressources.'
+                message: 'Accès administrateur requis'
             });
         }
         
-        next();
-    };
-};
-
-// Middleware pour limiter les tentatives de connexion
-const rateLimitAuth = () => {
-    const attempts = new Map();
-    const MAX_ATTEMPTS = 5;
-    const WINDOW_TIME = 15 * 60 * 1000; // 15 minutes
-    
-    return (req, res, next) => {
-        const identifier = req.ip + ':' + (req.body.email || req.body.telephone || '');
-        const now = Date.now();
-        
-        if (!attempts.has(identifier)) {
-            attempts.set(identifier, { count: 1, firstAttempt: now });
-            return next();
-        }
-        
-        const userAttempts = attempts.get(identifier);
-        
-        // Réinitialiser si la fenêtre de temps est écoulée
-        if (now - userAttempts.firstAttempt > WINDOW_TIME) {
-            attempts.set(identifier, { count: 1, firstAttempt: now });
-            return next();
-        }
-        
-        // Vérifier si la limite est atteinte
-        if (userAttempts.count >= MAX_ATTEMPTS) {
-            const timeLeft = Math.ceil((WINDOW_TIME - (now - userAttempts.firstAttempt)) / 1000 / 60);
-            return res.status(429).json({
-                message: `Trop de tentatives de connexion. Réessayez dans ${timeLeft} minutes.`
+        // Try to load Order model
+        let Order;
+        try {
+            Order = require('../models/Order');
+        } catch (modelError) {
+            console.error('Failed to load Order model:', modelError);
+            return res.status(500).json({
+                message: 'Erreur de modèle de données',
+                error: modelError.message
             });
         }
         
-        // Incrémenter le compteur
-        userAttempts.count++;
-        attempts.set(identifier, userAttempts);
+        console.log('📦 Admin verified, getting orders...');
         
-        next();
-    };
-};
-
-// Middleware pour enregistrer les tentatives de connexion échouées
-const logFailedAuth = (req, res, next) => {
-    const originalSend = res.send;
-    
-    res.send = function(data) {
-        // Si c'est une erreur d'authentification, l'enregistrer
-        if (res.statusCode === 401 || res.statusCode === 403) {
-            console.log(`🚫 Failed auth attempt: ${req.method} ${req.path} from ${req.ip} - Status: ${res.statusCode}`);
-            
-            if (req.body.email) {
-                console.log(`   Email: ${req.body.email}`);
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        // Filter by status
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Filter by date range
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                query.dateCommande.$lte = new Date(req.query.dateTo);
             }
         }
         
-        return originalSend.call(this, data);
-    };
-    
-    next();
-};
-
-// Middleware pour mettre à jour la dernière activité
-const updateLastActivity = async (req, res, next) => {
-    if (req.user && req.user.id) {
-        try {
-            // Mettre à jour en arrière-plan
-            setImmediate(async () => {
-                try {
-                    const User = require('../models/User');
-                    await User.findByIdAndUpdate(req.user.id, {
-                        dernierConnexion: new Date()
-                    });
-                } catch (error) {
-                    console.error('Error updating last activity:', error);
-                }
-            });
-        } catch (error) {
-            // Ne pas faire échouer la requête si la mise à jour échoue
-            console.error('Error in updateLastActivity:', error);
-        }
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        console.log('📦 Orders found:', orders.length);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get all orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes',
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
-    
-    next();
-};
+});
 
-// Middleware pour extraire les informations du client
-const extractClientInfo = (req, res, next) => {
-    req.clientInfo = {
-        ip: req.ip || req.connection.remoteAddress || req.socket.remoteAddress,
-        userAgent: req.get('User-Agent') || '',
-        timestamp: new Date()
-    };
-    
-    next();
-};
+// @route   POST /api/orders
+// @desc    Create new order
+// @access  Public
+router.post('/', async (req, res) => {
+    try {
+        console.log('📦 New order creation request received');
+        
+        // Try to load Order model
+        let Order;
+        try {
+            Order = require('../models/Order');
+        } catch (modelError) {
+            console.error('Failed to load Order model:', modelError);
+            return res.status(500).json({
+                message: 'Erreur de modèle de données',
+                error: modelError.message
+            });
+        }
+        
+        const {
+            numeroCommande,
+            client,
+            articles,
+            sousTotal,
+            fraisLivraison,
+            total,
+            modePaiement,
+            commentaires
+        } = req.body;
+        
+        // Validation
+        if (!numeroCommande || !client || !articles || articles.length === 0) {
+            return res.status(400).json({
+                message: 'Données de commande incomplètes'
+            });
+        }
+        
+        if (!client.prenom || !client.nom || !client.email || !client.telephone || !client.adresse || !client.wilaya) {
+            return res.status(400).json({
+                message: 'Informations client incomplètes'
+            });
+        }
+        
+        // Create order
+        const order = new Order({
+            numeroCommande,
+            client: {
+                userId: req.user ? req.user.id : null,
+                prenom: client.prenom.trim(),
+                nom: client.nom.trim(),
+                email: client.email.toLowerCase().trim(),
+                telephone: client.telephone.replace(/\s+/g, ''),
+                adresse: client.adresse.trim(),
+                wilaya: client.wilaya
+            },
+            articles: articles.map(article => ({
+                productId: article.productId,
+                nom: article.nom,
+                prix: parseFloat(article.prix),
+                quantite: parseInt(article.quantite),
+                image: article.image || ''
+            })),
+            sousTotal: parseFloat(sousTotal) || 0,
+            fraisLivraison: parseFloat(fraisLivraison) || 0,
+            total: parseFloat(total) || 0,
+            statut: 'en-attente',
+            modePaiement: modePaiement || 'Paiement à la livraison',
+            commentaires: commentaires || '',
+            dateCommande: new Date()
+        });
+        
+        await order.save();
+        console.log('✅ Order created successfully:', order.numeroCommande);
+        
+        res.status(201).json({
+            message: 'Commande créée avec succès',
+            order: {
+                _id: order._id,
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                total: order.total,
+                dateCommande: order.dateCommande
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Order creation error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données de commande invalides'
+            });
+        }
+        
+        res.status(500).json({
+            message: 'Erreur serveur lors de la création de la commande',
+            error: error.message
+        });
+    }
+});
 
-module.exports = {
-    auth,
-    optionalAuth,
-    requireAdmin,
-    requireOwnershipOrAdmin,
-    rateLimitAuth,
-    logFailedAuth,
-    updateLastActivity,
-    extractClientInfo
-};
+// @route   GET /api/orders/user/all
+// @desc    Get user orders
+// @access  Private
+router.get('/user/all', auth, async (req, res) => {
+    try {
+        console.log('📦 Getting orders for user:', req.user.id);
+        
+        const Order = require('../models/Order');
+        const orders = await Order.find({ 
+            'client.userId': req.user.id 
+        }).sort({ dateCommande: -1 });
+        
+        res.json({
+            orders,
+            count: orders.length
+        });
+        
+    } catch (error) {
+        console.error('❌ Get user orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes',
+            error: error.message
+        });
+    }
+});
+
+// @route   DELETE /api/orders/:id
+// @desc    Delete order (Admin only)
+// @access  Private/Admin
+router.delete('/:id', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const Order = require('../models/Order');
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        await Order.findByIdAndDelete(req.params.id);
+        
+        console.log(`✅ Order ${order.numeroCommande} deleted by admin`);
+        
+        res.json({
+            message: 'Commande supprimée avec succès'
+        });
+        
+    } catch (error) {
+        console.error('❌ Delete order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la suppression de la commande',
+            error: error.message
+        });
+    }
+});
+
+module.exports = router;

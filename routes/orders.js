@@ -1,112 +1,15 @@
 const express = require('express');
-const { auth } = require('../middleware/auth');
+const Order = require('../models/Order');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
-
-// Test route to verify router is working
-router.get('/test', (req, res) => {
-    res.json({ message: 'Orders route is working!' });
-});
-
-// @route   GET /api/orders
-// @desc    Get all orders (Admin only) 
-// @access  Private/Admin
-router.get('/', auth, async (req, res) => {
-    try {
-        console.log('📦 Admin accessing orders, user:', req.user);
-        
-        // Check if user is admin
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({
-                message: 'Accès administrateur requis'
-            });
-        }
-        
-        // Try to load Order model
-        let Order;
-        try {
-            Order = require('../models/Order');
-        } catch (modelError) {
-            console.error('Failed to load Order model:', modelError);
-            return res.status(500).json({
-                message: 'Erreur de modèle de données',
-                error: modelError.message
-            });
-        }
-        
-        console.log('📦 Admin verified, getting orders...');
-        
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
-        const skip = (page - 1) * limit;
-        
-        let query = {};
-        
-        // Filter by status
-        if (req.query.statut) {
-            query.statut = req.query.statut;
-        }
-        
-        // Filter by date range
-        if (req.query.dateFrom || req.query.dateTo) {
-            query.dateCommande = {};
-            if (req.query.dateFrom) {
-                query.dateCommande.$gte = new Date(req.query.dateFrom);
-            }
-            if (req.query.dateTo) {
-                query.dateCommande.$lte = new Date(req.query.dateTo);
-            }
-        }
-        
-        const orders = await Order.find(query)
-            .sort({ dateCommande: -1 })
-            .skip(skip)
-            .limit(limit);
-            
-        const total = await Order.countDocuments(query);
-        const totalPages = Math.ceil(total / limit);
-        
-        console.log('📦 Orders found:', orders.length);
-        
-        res.json({
-            orders,
-            pagination: {
-                currentPage: page,
-                totalPages,
-                totalOrders: total,
-                hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Get all orders error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des commandes',
-            error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
-    }
-});
 
 // @route   POST /api/orders
 // @desc    Create new order
 // @access  Public
 router.post('/', async (req, res) => {
     try {
-        console.log('📦 New order creation request received');
-        
-        // Try to load Order model
-        let Order;
-        try {
-            Order = require('../models/Order');
-        } catch (modelError) {
-            console.error('Failed to load Order model:', modelError);
-            return res.status(500).json({
-                message: 'Erreur de modèle de données',
-                error: modelError.message
-            });
-        }
+        console.log('📦 New order creation:', req.body);
         
         const {
             numeroCommande,
@@ -185,8 +88,7 @@ router.post('/', async (req, res) => {
         }
         
         res.status(500).json({
-            message: 'Erreur serveur lors de la création de la commande',
-            error: error.message
+            message: 'Erreur serveur lors de la création de la commande'
         });
     }
 });
@@ -198,7 +100,6 @@ router.get('/user/all', auth, async (req, res) => {
     try {
         console.log('📦 Getting orders for user:', req.user.id);
         
-        const Order = require('../models/Order');
         const orders = await Order.find({ 
             'client.userId': req.user.id 
         }).sort({ dateCommande: -1 });
@@ -211,8 +112,230 @@ router.get('/user/all', auth, async (req, res) => {
     } catch (error) {
         console.error('❌ Get user orders error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la récupération des commandes',
-            error: error.message
+            message: 'Erreur lors de la récupération des commandes'
+        });
+    }
+});
+
+// @route   GET /api/orders/admin
+// @desc    Get all orders for admin panel
+// @access  Private/Admin
+router.get('/admin', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        console.log('📦 Admin getting all orders');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        // Filter by status
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Filter by date range
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                query.dateCommande.$lte = new Date(req.query.dateTo);
+            }
+        }
+        
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get admin orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
+        });
+    }
+});
+
+// @route   GET /api/orders/:id
+// @desc    Get order by ID
+// @access  Private
+router.get('/:id', auth, async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        // Check if user owns this order or is admin
+        if (order.client.userId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès non autorisé à cette commande'
+            });
+        }
+        
+        res.json(order);
+        
+    } catch (error) {
+        console.error('❌ Get order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération de la commande'
+        });
+    }
+});
+
+// @route   PUT /api/orders/:id
+// @desc    Update order status
+// @access  Private
+router.put('/:id', auth, async (req, res) => {
+    try {
+        const { statut } = req.body;
+        
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        // Check permissions
+        if (req.user.role !== 'admin') {
+            // Users can only cancel their own orders and only if status is 'en-attente'
+            if (order.client.userId !== req.user.id) {
+                return res.status(403).json({
+                    message: 'Accès non autorisé à cette commande'
+                });
+            }
+            
+            if (statut !== 'annulée' || order.statut !== 'en-attente') {
+                return res.status(403).json({
+                    message: 'Vous pouvez seulement annuler une commande en attente'
+                });
+            }
+        }
+        
+        // Validate status
+        const validStatuses = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
+        if (!validStatuses.includes(statut)) {
+            return res.status(400).json({
+                message: 'Statut de commande invalide'
+            });
+        }
+        
+        order.statut = statut;
+        
+        if (statut === 'livrée') {
+            order.dateLivraison = new Date();
+        }
+        
+        await order.save();
+        
+        console.log(`✅ Order ${order.numeroCommande} status updated to: ${statut}`);
+        
+        res.json({
+            message: 'Statut de commande mis à jour',
+            order: {
+                _id: order._id,
+                numeroCommande: order.numeroCommande,
+                statut: order.statut,
+                dateLivraison: order.dateLivraison
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Update order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders
+// @desc    Get all orders (Admin only) - Legacy endpoint
+// @access  Private/Admin
+router.get('/', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        console.log('📦 Admin getting all orders (legacy endpoint)');
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        
+        // Filter by status
+        if (req.query.statut) {
+            query.statut = req.query.statut;
+        }
+        
+        // Filter by date range
+        if (req.query.dateFrom || req.query.dateTo) {
+            query.dateCommande = {};
+            if (req.query.dateFrom) {
+                query.dateCommande.$gte = new Date(req.query.dateFrom);
+            }
+            if (req.query.dateTo) {
+                query.dateCommande.$lte = new Date(req.query.dateTo);
+            }
+        }
+        
+        const orders = await Order.find(query)
+            .sort({ dateCommande: -1 })
+            .skip(skip)
+            .limit(limit);
+            
+        const total = await Order.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+        
+        res.json({
+            orders,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalOrders: total,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get all orders error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des commandes'
         });
     }
 });
@@ -229,7 +352,6 @@ router.delete('/:id', auth, async (req, res) => {
             });
         }
         
-        const Order = require('../models/Order');
         const order = await Order.findById(req.params.id);
         
         if (!order) {
@@ -249,8 +371,75 @@ router.delete('/:id', auth, async (req, res) => {
     } catch (error) {
         console.error('❌ Delete order error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la suppression de la commande',
-            error: error.message
+            message: 'Erreur lors de la suppression de la commande'
+        });
+    }
+});
+
+// @route   GET /api/orders/stats/dashboard
+// @desc    Get order statistics for admin dashboard
+// @access  Private/Admin
+router.get('/stats/dashboard', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+        
+        // Get various statistics
+        const totalOrders = await Order.countDocuments();
+        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
+        const monthlyOrders = await Order.countDocuments({ 
+            dateCommande: { $gte: startOfMonth } 
+        });
+        
+        // Calculate monthly revenue
+        const monthlyRevenue = await Order.aggregate([
+            {
+                $match: {
+                    dateCommande: { $gte: startOfMonth },
+                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$total' }
+                }
+            }
+        ]);
+        
+        // Get orders by status
+        const ordersByStatus = await Order.aggregate([
+            {
+                $group: {
+                    _id: '$statut',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        
+        res.json({
+            totalOrders,
+            pendingOrders,
+            monthlyOrders,
+            monthlyRevenue: monthlyRevenue[0]?.total || 0,
+            ordersByStatus: ordersByStatus.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {})
+        });
+        
+    } catch (error) {
+        console.error('❌ Get order stats error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des statistiques'
         });
     }
 });

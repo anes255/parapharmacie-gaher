@@ -239,5 +239,80 @@ process.on('SIGTERM', () => {
         });
     });
 });
+// Add this debugging code to your server.js file
+console.log('🔧 DEBUG: Starting route loading diagnostics...');
+
+// Test if orders.js file can be required at all
+try {
+    console.log('🔧 DEBUG: Testing require of orders.js...');
+    const ordersRoutes = require('./routes/orders');
+    console.log('🔧 DEBUG: ✅ orders.js required successfully');
+    console.log('🔧 DEBUG: Type of ordersRoutes:', typeof ordersRoutes);
+    
+    // Try to mount the routes
+    console.log('🔧 DEBUG: Attempting to mount /api/orders routes...');
+    app.use('/api/orders', ordersRoutes);
+    console.log('🔧 DEBUG: ✅ /api/orders routes mounted successfully');
+    
+} catch (error) {
+    console.error('🔧 DEBUG: ❌ CRITICAL: Failed to load orders routes');
+    console.error('🔧 DEBUG: Error message:', error.message);
+    console.error('🔧 DEBUG: Error stack:', error.stack);
+    
+    // Create a fallback route to at least respond
+    app.get('/api/orders/fallback', (req, res) => {
+        res.json({
+            error: 'Orders routes failed to load',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
+    });
+}
+
+// Test if auth routes are working
+try {
+    console.log('🔧 DEBUG: Testing auth routes...');
+    const authRoutes = require('./routes/auth');
+    console.log('🔧 DEBUG: ✅ Auth routes loaded successfully');
+} catch (error) {
+    console.error('🔧 DEBUG: ❌ Auth routes failed:', error.message);
+}
+
+// Add a debug route to test if server is responding
+app.get('/api/debug', (req, res) => {
+    console.log('🔧 DEBUG: Debug route accessed');
+    res.json({
+        message: 'Server debug route working',
+        timestamp: new Date().toISOString(),
+        routes: {
+            orders: 'should be at /api/orders',
+            ordersTest: 'should be at /api/orders/test',
+            ordersDebug: 'should be at /api/orders/debug-status'
+        }
+    });
+});
+
+// List all registered routes for debugging
+console.log('🔧 DEBUG: Listing all registered routes...');
+app._router.stack.forEach(function(r, index) {
+    if (r.route && r.route.path) {
+        console.log(`🔧 DEBUG: Route ${index}: ${r.route.path}`);
+    } else if (r.name === 'router') {
+        console.log(`🔧 DEBUG: Router ${index}: ${r.regexp}`);
+        if (r.handle && r.handle.stack) {
+            r.handle.stack.forEach(function(rr, subIndex) {
+                if (rr.route && rr.route.path) {
+                    console.log(`🔧 DEBUG:   Sub-route ${subIndex}: ${rr.route.path}`);
+                }
+            });
+        }
+    }
+});
+
+console.log('🔧 DEBUG: Route loading diagnostics completed');
+
+// Add this at the very end of your server.js, just before app.listen()
+console.log('🔧 DEBUG: Server setup completed, starting server...'); 
 
 module.exports = app;
+

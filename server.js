@@ -6,22 +6,28 @@ require('dotenv').config();
 
 const app = express();
 
-console.log('🚀 Starting Shifa Parapharmacie Server...');
+// Enhanced logging
+const log = (message, type = 'INFO') => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [${type}] ${message}`);
+};
 
-// CORS configuration
+log('Starting Shifa Parapharmacie Backend Server...');
+
+// CORS configuration - Enhanced
 const corsOptions = {
     origin: [
         'http://localhost:3000',
-        'http://localhost:3001', 
+        'http://localhost:3001',
         'http://127.0.0.1:3000',
         'http://127.0.0.1:3001',
         'http://localhost:5173',
         'https://parapharmacieshifa.com',
         'http://parapharmacieshifa.com',
-        // Add your frontend domain here
-        'https://your-frontend-domain.com'
+        'https://anes255.github.io',
+        'http://anes255.github.io'
     ],
-    credentials: true,
+    credentials: false,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: [
         'Content-Type', 
@@ -36,171 +42,282 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// Basic middleware
-app.use(express.json({ limit: '10mb' }));
+// Enhanced middleware with error handling
+app.use(express.json({ 
+    limit: '10mb',
+    verify: (req, res, buf, encoding) => {
+        try {
+            JSON.parse(buf);
+        } catch (err) {
+            log(`Invalid JSON in request: ${err.message}`, 'ERROR');
+            res.status(400).json({ message: 'Invalid JSON format' });
+            return;
+        }
+    }
+}));
+
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging middleware
+// Enhanced request logging
 app.use((req, res, next) => {
-    const timestamp = new Date().toISOString();
-    console.log(`${timestamp} - ${req.method} ${req.path}`);
-    if (req.method === 'POST' || req.method === 'PUT') {
-        console.log('Request body keys:', Object.keys(req.body));
+    const start = Date.now();
+    
+    // Log request
+    log(`${req.method} ${req.path} - IP: ${req.ip} - User-Agent: ${req.get('User-Agent')?.substring(0, 50)}...`);
+    
+    // Log request body for debugging (only for POST/PUT)
+    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.path.includes('/orders')) {
+        log(`Request Body: ${JSON.stringify(req.body, null, 2)}`, 'DEBUG');
     }
+    
+    // Log response time
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        log(`${req.method} ${req.path} - ${res.statusCode} - ${duration}ms`);
+    });
+    
     next();
 });
 
-// ROOT ROUTE
+// Database connection status
+let dbConnected = false;
+let dbError = null;
+
+// ROOT ROUTE with enhanced status
 app.get('/', (req, res) => {
     res.json({
         message: 'Shifa Parapharmacie Backend API',
         status: 'running',
+        database: dbConnected ? 'connected' : 'disconnected',
+        databaseError: dbError,
         timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
         version: '1.0.0'
     });
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-    res.json({
-        message: 'API is healthy',
-        timestamp: new Date().toISOString(),
+// Enhanced health check with database status
+app.get('/api/health', async (req, res) => {
+    const health = {
         status: 'running',
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-    });
-});
-
-// Debug route
-app.get('/api/debug', (req, res) => {
-    res.json({
-        message: 'Debug endpoint working',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        mongoState: mongoose.connection.readyState,
+        uptime: process.uptime(),
+        database: {
+            connected: dbConnected,
+            error: dbError,
+            readyState: mongoose.connection.readyState
+        },
+        memory: process.memoryUsage(),
         routes: {
-            auth: '/api/auth/*',
-            products: '/api/products/*', 
-            orders: '/api/orders/*',
-            admin: '/api/admin/*',
-            settings: '/api/settings/*'
+            auth: false,
+            products: false,
+            orders: false,
+            admin: false,
+            settings: false
         }
-    });
+    };
+    
+    // Test database connection
+    try {
+        if (dbConnected) {
+            await mongoose.connection.db.admin().ping();
+            health.database.ping = 'success';
+        }
+    } catch (error) {
+        health.database.ping = 'failed';
+        health.database.pingError = error.message;
+    }
+    
+    res.json(health);
 });
 
-// Load routes with error handling
-console.log('📝 Loading routes...');
-
-// Auth routes
-try {
-    const authRoutes = require('./routes/auth');
-    app.use('/api/auth', authRoutes);
-    console.log('✅ Auth routes loaded successfully');
-} catch (error) {
-    console.error('❌ Failed to load auth routes:', error.message);
-    console.error(error.stack);
-}
-
-// Product routes  
-try {
-    const productRoutes = require('./routes/products');
-    app.use('/api/products', productRoutes);
-    console.log('✅ Product routes loaded successfully');
-} catch (error) {
-    console.error('❌ Failed to load product routes:', error.message);
-    console.error(error.stack);
-}
-
-// Order routes
-try {
-    const orderRoutes = require('./routes/orders');
-    app.use('/api/orders', orderRoutes);
-    console.log('✅ Order routes loaded successfully');
-} catch (error) {
-    console.error('❌ Failed to load order routes:', error.message);
-    console.error(error.stack);
-    
-    // Fallback routes if order routes fail
-    app.get('/api/orders/test', (req, res) => {
-        res.json({ message: 'Fallback orders test route', error: error.message });
-    });
-    
-    app.get('/api/orders', (req, res) => {
-        res.status(500).json({ 
-            message: 'Orders routes failed to load', 
-            error: error.message,
-            orders: []
+// Debug endpoint for testing order creation
+app.post('/api/debug/order-test', async (req, res) => {
+    try {
+        log('Order test endpoint called', 'DEBUG');
+        log(`Request body: ${JSON.stringify(req.body, null, 2)}`, 'DEBUG');
+        
+        // Test basic order model creation without saving
+        const Order = require('./models/Order');
+        
+        const testOrder = new Order({
+            numeroCommande: `TEST${Date.now()}`,
+            client: {
+                prenom: 'Test',
+                nom: 'User',
+                email: 'test@example.com',
+                telephone: '0123456789',
+                adresse: 'Test Address',
+                wilaya: 'Tipaza'
+            },
+            articles: [{
+                productId: 'test123',
+                nom: 'Test Product',
+                prix: 100,
+                quantite: 1
+            }],
+            sousTotal: 100,
+            fraisLivraison: 0,
+            total: 100
         });
-    });
-}
+        
+        // Validate without saving
+        const validationError = testOrder.validateSync();
+        if (validationError) {
+            log(`Validation error: ${JSON.stringify(validationError.errors)}`, 'ERROR');
+            return res.status(400).json({
+                message: 'Validation failed',
+                errors: validationError.errors
+            });
+        }
+        
+        log('Test order validation passed', 'DEBUG');
+        res.json({
+            message: 'Order test passed',
+            validationResult: 'success',
+            testOrder: testOrder.toObject()
+        });
+        
+    } catch (error) {
+        log(`Order test error: ${error.message}`, 'ERROR');
+        log(`Error stack: ${error.stack}`, 'ERROR');
+        res.status(500).json({
+            message: 'Order test failed',
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
 
-// Admin routes
-try {
-    const adminRoutes = require('./routes/admin');
-    app.use('/api/admin', adminRoutes);
-    console.log('✅ Admin routes loaded successfully');
-} catch (error) {
-    console.error('❌ Failed to load admin routes:', error.message);
-    console.error(error.stack);
-}
+// ROUTE LOADING with enhanced error handling
+const loadRoutes = () => {
+    try {
+        const authRoutes = require('./routes/auth');
+        app.use('/api/auth', authRoutes);
+        log('Auth routes loaded successfully');
+    } catch (error) {
+        log(`Auth routes failed: ${error.message}`, 'ERROR');
+        log(`Auth routes stack: ${error.stack}`, 'ERROR');
+    }
 
-// Settings routes
-try {
-    const settingsRoutes = require('./routes/settings');
-    app.use('/api/settings', settingsRoutes);
-    console.log('✅ Settings routes loaded successfully');
-} catch (error) {
-    console.error('❌ Failed to load settings routes:', error.message);
-    console.error(error.stack);
-}
+    try {
+        const productRoutes = require('./routes/products');
+        app.use('/api/products', productRoutes);
+        log('Product routes loaded successfully');
+    } catch (error) {
+        log(`Product routes failed: ${error.message}`, 'ERROR');
+        log(`Product routes stack: ${error.stack}`, 'ERROR');
+    }
 
-// MongoDB Connection with retry logic
+    try {
+        const orderRoutes = require('./routes/orders');
+        app.use('/api/orders', orderRoutes);
+        log('Order routes loaded successfully');
+    } catch (error) {
+        log(`Order routes failed: ${error.message}`, 'ERROR');
+        log(`Order routes stack: ${error.stack}`, 'ERROR');
+    }
+
+    try {
+        const adminRoutes = require('./routes/admin');
+        app.use('/api/admin', adminRoutes);
+        log('Admin routes loaded successfully');
+    } catch (error) {
+        log(`Admin routes failed: ${error.message}`, 'ERROR');
+        log(`Admin routes stack: ${error.stack}`, 'ERROR');
+    }
+
+    try {
+        const settingsRoutes = require('./routes/settings');
+        app.use('/api/settings', settingsRoutes);
+        log('Settings routes loaded successfully');
+    } catch (error) {
+        log(`Settings routes failed: ${error.message}`, 'ERROR');
+        log(`Settings routes stack: ${error.stack}`, 'ERROR');
+    }
+};
+
+// Enhanced MongoDB Connection with better error handling
 const connectDB = async () => {
     try {
-        console.log('🔌 Connecting to MongoDB...');
+        log('Attempting MongoDB connection...');
         
         if (!process.env.MONGODB_URI) {
-            throw new Error('MONGODB_URI environment variable is not set');
+            throw new Error('MONGODB_URI environment variable not set');
         }
         
-        const connectionOptions = {
+        log(`MongoDB URI: ${process.env.MONGODB_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')}`);
+        
+        // Enhanced connection options
+        const options = {
             useNewUrlParser: true,
             useUnifiedTopology: true,
             maxPoolSize: 10,
             serverSelectionTimeoutMS: 5000,
             socketTimeoutMS: 45000,
+            family: 4
         };
         
-        await mongoose.connect(process.env.MONGODB_URI, connectionOptions);
+        await mongoose.connect(process.env.MONGODB_URI, options);
         
-        console.log('✅ MongoDB connected successfully');
-        console.log('📍 Database:', mongoose.connection.name);
+        dbConnected = true;
+        dbError = null;
+        log('MongoDB connected successfully');
         
-        // Initialize admin user after successful connection
+        // Add connection event listeners
+        mongoose.connection.on('error', (error) => {
+            dbError = error.message;
+            log(`MongoDB error: ${error.message}`, 'ERROR');
+        });
+        
+        mongoose.connection.on('disconnected', () => {
+            dbConnected = false;
+            log('MongoDB disconnected', 'WARN');
+        });
+        
+        mongoose.connection.on('reconnected', () => {
+            dbConnected = true;
+            dbError = null;
+            log('MongoDB reconnected');
+        });
+        
+        // Test the connection
+        await mongoose.connection.db.admin().ping();
+        log('MongoDB ping successful');
+        
+        // Initialize admin user
         await initializeAdmin();
         
+        // Load routes after successful DB connection
+        loadRoutes();
+        
     } catch (error) {
-        console.error('❌ MongoDB connection failed:', error.message);
-        console.log('🔄 Retrying connection in 10 seconds...');
+        dbConnected = false;
+        dbError = error.message;
+        log(`MongoDB connection failed: ${error.message}`, 'ERROR');
+        log(`MongoDB error stack: ${error.stack}`, 'ERROR');
+        
+        // Retry connection after 10 seconds
+        log('Retrying MongoDB connection in 10 seconds...', 'WARN');
         setTimeout(connectDB, 10000);
     }
 };
 
-// Initialize admin user
+// Enhanced admin initialization
 async function initializeAdmin() {
     try {
-        console.log('👤 Checking admin user...');
+        log('Initializing admin user...');
         
         const User = require('./models/User');
         const bcrypt = require('bcryptjs');
         
-        // Check if admin exists
         let admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
-        
         if (!admin) {
-            console.log('👤 Creating admin user...');
+            log('Creating admin user...');
             
-            const salt = await bcrypt.genSalt(12);
-            const hashedPassword = await bcrypt.hash('anesaya75', salt);
+            const salt = bcrypt.genSaltSync(12);
+            const hashedPassword = bcrypt.hashSync('anesaya75', salt);
             
             admin = new User({
                 nom: 'Gaher',
@@ -211,96 +328,160 @@ async function initializeAdmin() {
                 wilaya: 'Tipaza',
                 password: hashedPassword,
                 role: 'admin',
-                actif: true,
-                dateInscription: new Date(),
-                dernierConnexion: new Date()
+                dateInscription: new Date()
             });
             
             await admin.save();
-            console.log('✅ Admin user created successfully');
+            log('Admin user created successfully');
         } else {
-            console.log('✅ Admin user already exists');
+            log('Admin user already exists');
         }
-        
-        // Update admin's last connection
-        admin.dernierConnexion = new Date();
-        await admin.save();
-        
     } catch (error) {
-        console.error('❌ Admin user initialization failed:', error.message);
-        console.error('This is not critical, server will continue...');
+        log(`Admin initialization failed: ${error.message}`, 'ERROR');
+        log(`Admin error stack: ${error.stack}`, 'ERROR');
     }
 }
 
-// Global error handling middleware
+// Enhanced error handling middleware
 app.use((error, req, res, next) => {
-    console.error('💥 Global error handler:', error);
-    console.error('Error stack:', error.stack);
+    log(`Unhandled error: ${error.message}`, 'ERROR');
+    log(`Error stack: ${error.stack}`, 'ERROR');
+    log(`Request: ${req.method} ${req.path}`, 'ERROR');
+    log(`Request body: ${JSON.stringify(req.body)}`, 'ERROR');
     
+    // Determine error type and respond appropriately
+    if (error.name === 'ValidationError') {
+        return res.status(400).json({
+            message: 'Validation error',
+            details: Object.values(error.errors).map(err => err.message),
+            timestamp: new Date().toISOString()
+        });
+    }
+    
+    if (error.name === 'CastError') {
+        return res.status(400).json({
+            message: 'Invalid data format',
+            field: error.path,
+            value: error.value,
+            timestamp: new Date().toISOString()
+        });
+    }
+    
+    if (error.code === 11000) {
+        return res.status(409).json({
+            message: 'Duplicate entry',
+            field: Object.keys(error.keyPattern)[0],
+            timestamp: new Date().toISOString()
+        });
+    }
+    
+    // Generic server error
     res.status(500).json({ 
         message: 'Internal server error',
         timestamp: new Date().toISOString(),
-        ...(process.env.NODE_ENV === 'development' && { error: error.message })
+        requestId: req.headers['x-request-id'] || 'unknown',
+        error: process.env.NODE_ENV === 'development' ? {
+            message: error.message,
+            stack: error.stack
+        } : undefined
     });
 });
 
-// 404 handler for unmatched routes
+// Enhanced 404 handler
 app.use('*', (req, res) => {
-    console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
+    log(`404 - Route not found: ${req.method} ${req.originalUrl}`, 'WARN');
     res.status(404).json({
         message: 'Route not found',
         path: req.originalUrl,
         method: req.method,
         timestamp: new Date().toISOString(),
-        availableRoutes: {
-            health: '/api/health',
-            debug: '/api/debug',
-            auth: '/api/auth/*',
-            products: '/api/products/*',
-            orders: '/api/orders/*',
-            admin: '/api/admin/*'
-        }
+        availableRoutes: [
+            'GET /',
+            'GET /api/health',
+            'POST /api/debug/order-test',
+            'POST /api/auth/login',
+            'POST /api/auth/register',
+            'GET /api/products',
+            'POST /api/orders',
+            'GET /api/admin/dashboard'
+        ]
     });
 });
 
-// Database connection
-connectDB();
-
-// Graceful shutdown handlers
-process.on('SIGTERM', () => {
-    console.log('💀 SIGTERM received, shutting down gracefully...');
-    mongoose.connection.close(() => {
-        console.log('✅ MongoDB connection closed');
-        process.exit(0);
-    });
+// Graceful shutdown handling
+process.on('SIGTERM', async () => {
+    log('SIGTERM received, shutting down gracefully...');
+    
+    try {
+        await mongoose.connection.close();
+        log('MongoDB connection closed');
+    } catch (error) {
+        log(`Error closing MongoDB: ${error.message}`, 'ERROR');
+    }
+    
+    process.exit(0);
 });
 
-process.on('SIGINT', () => {
-    console.log('💀 SIGINT received, shutting down gracefully...');
-    mongoose.connection.close(() => {
-        console.log('✅ MongoDB connection closed');
-        process.exit(0);
-    });
+process.on('SIGINT', async () => {
+    log('SIGINT received, shutting down gracefully...');
+    
+    try {
+        await mongoose.connection.close();
+        log('MongoDB connection closed');
+    } catch (error) {
+        log(`Error closing MongoDB: ${error.message}`, 'ERROR');
+    }
+    
+    process.exit(0);
 });
 
-// Unhandled promise rejection handler
-process.on('unhandledRejection', (err) => {
-    console.error('💥 Unhandled Promise Rejection:', err);
-    console.error('💀 Shutting down server...');
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    log(`Uncaught Exception: ${error.message}`, 'ERROR');
+    log(`Stack: ${error.stack}`, 'ERROR');
     process.exit(1);
 });
+
+process.on('unhandledRejection', (reason, promise) => {
+    log(`Unhandled Rejection at: ${promise}, reason: ${reason}`, 'ERROR');
+    process.exit(1);
+});
+
+// Connect to database
+connectDB();
 
 // Start server
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🔗 Debug: http://localhost:${PORT}/api/debug`);
-    console.log(`📊 API Base: http://localhost:${PORT}/api`);
-    console.log('✅ Server startup completed');
+const server = app.listen(PORT, '0.0.0.0', () => {
+    log(`Server running on port ${PORT}`);
+    log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    log(`Health check: http://localhost:${PORT}/api/health`);
+    log(`Debug endpoint: http://localhost:${PORT}/api/debug/order-test`);
+    log(`Process ID: ${process.pid}`);
+    log(`Node version: ${process.version}`);
 });
 
-// Export app for testing
+// Server error handling
+server.on('error', (error) => {
+    if (error.syscall !== 'listen') {
+        throw error;
+    }
+    
+    const bind = typeof PORT === 'string' ? 'Pipe ' + PORT : 'Port ' + PORT;
+    
+    switch (error.code) {
+        case 'EACCES':
+            log(`${bind} requires elevated privileges`, 'ERROR');
+            process.exit(1);
+            break;
+        case 'EADDRINUSE':
+            log(`${bind} is already in use`, 'ERROR');
+            process.exit(1);
+            break;
+        default:
+            throw error;
+    }
+});
+
 module.exports = app;

@@ -1,6 +1,6 @@
 const express = require('express');
 const Order = require('../models/Order');
-const auth = require('../middleware/auth');
+const { auth } = require('../middleware/auth'); // FIXED: destructured import
 
 const router = express.Router();
 
@@ -117,8 +117,8 @@ router.get('/user/all', auth, async (req, res) => {
     }
 });
 
-// @route   GET /api/orders/admin
-// @desc    Get all orders for admin panel - THIS IS THE MISSING ENDPOINT!
+// @route   GET /api/orders/admin - THE MISSING ENDPOINT!
+// @desc    Get all orders for admin panel  
 // @access  Private/Admin
 router.get('/admin', auth, async (req, res) => {
     try {

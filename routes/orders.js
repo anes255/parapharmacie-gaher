@@ -118,18 +118,21 @@ router.get('/user/all', auth, async (req, res) => {
 });
 
 // @route   GET /api/orders/admin
-// @desc    Get all orders for admin panel
+// @desc    Get all orders for admin panel - THIS IS THE MISSING ENDPOINT!
 // @access  Private/Admin
 router.get('/admin', auth, async (req, res) => {
     try {
+        console.log('📦 Admin orders endpoint called by user:', req.user?.email || 'unknown');
+        
         // Check if user is admin
-        if (req.user.role !== 'admin') {
+        if (!req.user || req.user.role !== 'admin') {
+            console.log('❌ Access denied - user role:', req.user?.role || 'none');
             return res.status(403).json({
                 message: 'Accès administrateur requis'
             });
         }
         
-        console.log('📦 Admin getting all orders');
+        console.log('✅ Admin access granted - loading orders...');
         
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
@@ -161,6 +164,8 @@ router.get('/admin', auth, async (req, res) => {
         const total = await Order.countDocuments(query);
         const totalPages = Math.ceil(total / limit);
         
+        console.log(`✅ Found ${orders.length} orders (total: ${total})`);
+        
         res.json({
             orders,
             pagination: {
@@ -176,6 +181,74 @@ router.get('/admin', auth, async (req, res) => {
         console.error('❌ Get admin orders error:', error);
         res.status(500).json({
             message: 'Erreur lors de la récupération des commandes'
+        });
+    }
+});
+
+// @route   GET /api/orders/stats/dashboard
+// @desc    Get order statistics for admin dashboard
+// @access  Private/Admin
+router.get('/stats/dashboard', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+        
+        // Get various statistics
+        const totalOrders = await Order.countDocuments();
+        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
+        const monthlyOrders = await Order.countDocuments({ 
+            dateCommande: { $gte: startOfMonth } 
+        });
+        
+        // Calculate monthly revenue
+        const monthlyRevenue = await Order.aggregate([
+            {
+                $match: {
+                    dateCommande: { $gte: startOfMonth },
+                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$total' }
+                }
+            }
+        ]);
+        
+        // Get orders by status
+        const ordersByStatus = await Order.aggregate([
+            {
+                $group: {
+                    _id: '$statut',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        
+        res.json({
+            totalOrders,
+            pendingOrders,
+            monthlyOrders,
+            monthlyRevenue: monthlyRevenue[0]?.total || 0,
+            ordersByStatus: ordersByStatus.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {})
+        });
+        
+    } catch (error) {
+        console.error('❌ Get order stats error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des statistiques'
         });
     }
 });
@@ -277,8 +350,44 @@ router.put('/:id', auth, async (req, res) => {
     }
 });
 
+// @route   DELETE /api/orders/:id
+// @desc    Delete order (Admin only)
+// @access  Private/Admin
+router.delete('/:id', auth, async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({
+                message: 'Commande non trouvée'
+            });
+        }
+        
+        await Order.findByIdAndDelete(req.params.id);
+        
+        console.log(`✅ Order ${order.numeroCommande} deleted by admin`);
+        
+        res.json({
+            message: 'Commande supprimée avec succès'
+        });
+        
+    } catch (error) {
+        console.error('❌ Delete order error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la suppression de la commande'
+        });
+    }
+});
+
 // @route   GET /api/orders
-// @desc    Get all orders (Admin only) - Legacy endpoint
+// @desc    Get all orders (Admin only) - Legacy fallback endpoint
 // @access  Private/Admin
 router.get('/', auth, async (req, res) => {
     try {
@@ -336,110 +445,6 @@ router.get('/', auth, async (req, res) => {
         console.error('❌ Get all orders error:', error);
         res.status(500).json({
             message: 'Erreur lors de la récupération des commandes'
-        });
-    }
-});
-
-// @route   DELETE /api/orders/:id
-// @desc    Delete order (Admin only)
-// @access  Private/Admin
-router.delete('/:id', auth, async (req, res) => {
-    try {
-        // Check if user is admin
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({
-                message: 'Accès administrateur requis'
-            });
-        }
-        
-        const order = await Order.findById(req.params.id);
-        
-        if (!order) {
-            return res.status(404).json({
-                message: 'Commande non trouvée'
-            });
-        }
-        
-        await Order.findByIdAndDelete(req.params.id);
-        
-        console.log(`✅ Order ${order.numeroCommande} deleted by admin`);
-        
-        res.json({
-            message: 'Commande supprimée avec succès'
-        });
-        
-    } catch (error) {
-        console.error('❌ Delete order error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la suppression de la commande'
-        });
-    }
-});
-
-// @route   GET /api/orders/stats/dashboard
-// @desc    Get order statistics for admin dashboard
-// @access  Private/Admin
-router.get('/stats/dashboard', auth, async (req, res) => {
-    try {
-        // Check if user is admin
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({
-                message: 'Accès administrateur requis'
-            });
-        }
-        
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
-        
-        // Get various statistics
-        const totalOrders = await Order.countDocuments();
-        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
-        const monthlyOrders = await Order.countDocuments({ 
-            dateCommande: { $gte: startOfMonth } 
-        });
-        
-        // Calculate monthly revenue
-        const monthlyRevenue = await Order.aggregate([
-            {
-                $match: {
-                    dateCommande: { $gte: startOfMonth },
-                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$total' }
-                }
-            }
-        ]);
-        
-        // Get orders by status
-        const ordersByStatus = await Order.aggregate([
-            {
-                $group: {
-                    _id: '$statut',
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-        
-        res.json({
-            totalOrders,
-            pendingOrders,
-            monthlyOrders,
-            monthlyRevenue: monthlyRevenue[0]?.total || 0,
-            ordersByStatus: ordersByStatus.reduce((acc, item) => {
-                acc[item._id] = item.count;
-                return acc;
-            }, {})
-        });
-        
-    } catch (error) {
-        console.error('❌ Get order stats error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des statistiques'
         });
     }
 });

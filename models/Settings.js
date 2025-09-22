@@ -1,108 +1,296 @@
 const mongoose = require('mongoose');
 
 const SettingsSchema = new mongoose.Schema({
-    // Site settings
+    // Site Information
     siteName: {
         type: String,
-        default: 'Shifa Parapharmacie'
+        required: true,
+        trim: true,
+        default: 'Shifa - Parapharmacie'
     },
     siteDescription: {
         type: String,
-        default: 'Votre parapharmacie en ligne de confiance'
+        required: true,
+        trim: true,
+        default: 'Votre parapharmacie de confiance à Tipaza, Algérie'
     },
-    siteUrl: {
+    siteKeywords: {
         type: String,
-        default: 'https://parapharmacieshifa.com'
+        default: 'parapharmacie, santé, beauté, Tipaza, Algérie, pharmacie, soins'
     },
     siteLogo: {
         type: String,
         default: ''
     },
+    favicon: {
+        type: String,
+        default: ''
+    },
     
-    // Contact information
+    // Contact Information
     contact: {
         email: {
             type: String,
-            default: 'pharmaciegaher@gmail.com'
+            required: true,
+            default: 'pharmaciegaher@gmail.com',
+            validate: {
+                validator: function(v) {
+                    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+                },
+                message: 'Format d\'email invalide'
+            }
         },
         telephone: {
             type: String,
-            default: '+213123456789'
+            required: true,
+            default: '+213 123 456 789'
+        },
+        fax: {
+            type: String,
+            default: ''
         },
         adresse: {
             type: String,
+            required: true,
             default: 'Tipaza, Algérie'
+        },
+        ville: {
+            type: String,
+            default: 'Tipaza'
+        },
+        wilaya: {
+            type: String,
+            default: 'Tipaza'
+        },
+        codePostal: {
+            type: String,
+            default: '42000'
         },
         horaires: {
             type: String,
-            default: 'Lun-Sam: 9h-18h, Dim: 9h-13h'
+            default: 'Lun-Sam: 8h-20h, Dim: 9h-18h'
+        },
+        horaireRamadan: {
+            type: String,
+            default: 'Lun-Sam: 9h-17h, Dim: 10h-16h'
         }
     },
     
-    // Shipping settings
+    // Social Media
+    socialMedia: {
+        facebook: {
+            type: String,
+            default: 'https://www.facebook.com/pharmaciegaher/?locale=mg_MG'
+        },
+        instagram: {
+            type: String,
+            default: 'https://www.instagram.com/pharmaciegaher/'
+        },
+        twitter: {
+            type: String,
+            default: ''
+        },
+        youtube: {
+            type: String,
+            default: ''
+        },
+        linkedin: {
+            type: String,
+            default: ''
+        },
+        tiktok: {
+            type: String,
+            default: ''
+        },
+        whatsapp: {
+            type: String,
+            default: '+213123456789'
+        }
+    },
+    
+    // E-commerce Settings
     shipping: {
-        fraisLivraisonDefaut: {
+        standardCost: {
+            type: Number,
+            default: 300,
+            min: 0
+        },
+        expressCost: {
             type: Number,
             default: 500,
             min: 0
         },
-        livraisonGratuiteSeuil: {
+        freeShippingThreshold: {
             type: Number,
             default: 5000,
             min: 0
         },
-        delaiLivraisonMin: {
-            type: Number,
-            default: 2,
-            min: 1
+        estimatedDays: {
+            type: String,
+            default: '2-5 jours ouvrables'
         },
-        delaiLivraisonMax: {
-            type: Number,
-            default: 7,
-            min: 1
+        expressEstimatedDays: {
+            type: String,
+            default: '1-2 jours ouvrables'
         },
-        wilayasDisponibles: [{
-            nom: String,
-            fraisLivraison: {
-                type: Number,
-                default: 500
-            },
-            delaiLivraison: {
+        availableWilayas: [{
+            type: String,
+            enum: [
+                'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa',
+                'Biskra', 'Béchar', 'Blida', 'Bouira', 'Tamanrasset', 'Tébessa',
+                'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger', 'Djelfa', 'Jijel',
+                'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba', 'Guelma',
+                'Constantine', 'Médéa', 'Mostaganem', 'M\'Sila', 'Mascara', 'Ouargla',
+                'Oran', 'El Bayadh', 'Illizi', 'Bordj Bou Arréridj', 'Boumerdès',
+                'El Tarf', 'Tindouf', 'Tissemsilt', 'El Oued', 'Khenchela',
+                'Souk Ahras', 'Tipaza', 'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent',
+                'Ghardaïa', 'Relizane'
+            ]
+        }],
+        shippingMethods: [{
+            nom: {
                 type: String,
-                default: '2-7 jours'
+                required: true
+            },
+            prix: {
+                type: Number,
+                required: true,
+                min: 0
+            },
+            delai: {
+                type: String,
+                required: true
+            },
+            description: {
+                type: String,
+                default: ''
+            },
+            actif: {
+                type: Boolean,
+                default: true
             }
         }]
     },
     
-    // Payment settings
+    // Payment Settings
     payment: {
-        modesDisponibles: [{
+        currency: {
+            type: String,
+            default: 'DA',
+            enum: ['DA', 'USD', 'EUR']
+        },
+        methods: [{
             nom: {
                 type: String,
-                enum: ['Paiement à la livraison', 'Carte bancaire', 'Virement bancaire', 'PayPal']
+                required: true
             },
             actif: {
                 type: Boolean,
                 default: true
             },
-            description: String
+            configuration: {
+                type: Map,
+                of: String,
+                default: {}
+            }
         }],
-        taxe: {
+        defaultMethod: {
+            type: String,
+            default: 'Paiement à la livraison'
+        },
+        cashOnDelivery: {
+            type: Boolean,
+            default: true
+        },
+        bankTransfer: {
+            type: Boolean,
+            default: false
+        },
+        creditCard: {
+            type: Boolean,
+            default: false
+        }
+    },
+    
+    // Tax Settings
+    tax: {
+        enabled: {
+            type: Boolean,
+            default: false
+        },
+        rate: {
             type: Number,
             default: 0,
             min: 0,
             max: 100
+        },
+        name: {
+            type: String,
+            default: 'TVA'
         }
     },
     
-    // Email settings
+    // Localization
+    localization: {
+        language: {
+            type: String,
+            default: 'fr',
+            enum: ['fr', 'ar', 'en']
+        },
+        timezone: {
+            type: String,
+            default: 'Africa/Algiers'
+        },
+        dateFormat: {
+            type: String,
+            default: 'DD/MM/YYYY'
+        },
+        numberFormat: {
+            decimal: {
+                type: String,
+                default: ','
+            },
+            thousands: {
+                type: String,
+                default: ' '
+            }
+        }
+    },
+    
+    // Email Settings
     email: {
         smtp: {
-            host: String,
-            port: Number,
-            secure: Boolean,
-            user: String,
-            password: String
+            host: {
+                type: String,
+                default: ''
+            },
+            port: {
+                type: Number,
+                default: 587
+            },
+            secure: {
+                type: Boolean,
+                default: false
+            },
+            username: {
+                type: String,
+                default: ''
+            },
+            password: {
+                type: String,
+                default: '',
+                select: false
+            }
+        },
+        from: {
+            name: {
+                type: String,
+                default: 'Shifa Parapharmacie'
+            },
+            email: {
+                type: String,
+                default: 'pharmaciegaher@gmail.com'
+            }
         },
         templates: {
             welcome: {
@@ -110,54 +298,130 @@ const SettingsSchema = new mongoose.Schema({
                     type: String,
                     default: 'Bienvenue chez Shifa Parapharmacie'
                 },
-                body: String
+                enabled: {
+                    type: Boolean,
+                    default: true
+                }
             },
             orderConfirmation: {
                 subject: {
                     type: String,
-                    default: 'Confirmation de votre commande'
+                    default: 'Confirmation de votre commande #{orderNumber}'
                 },
-                body: String
+                enabled: {
+                    type: Boolean,
+                    default: true
+                }
             },
-            orderStatusUpdate: {
+            orderShipped: {
                 subject: {
                     type: String,
-                    default: 'Mise à jour de votre commande'
+                    default: 'Votre commande #{orderNumber} a été expédiée'
                 },
-                body: String
+                enabled: {
+                    type: Boolean,
+                    default: true
+                }
+            },
+            passwordReset: {
+                subject: {
+                    type: String,
+                    default: 'Réinitialisation de votre mot de passe'
+                },
+                enabled: {
+                    type: Boolean,
+                    default: true
+                }
             }
         }
     },
     
-    // SEO settings
+    // SMS Settings
+    sms: {
+        provider: {
+            type: String,
+            default: '',
+            enum: ['', 'twilio', 'nexmo', 'local']
+        },
+        configuration: {
+            type: Map,
+            of: String,
+            default: {}
+        },
+        templates: {
+            orderConfirmation: {
+                message: {
+                    type: String,
+                    default: 'Votre commande #{orderNumber} a été confirmée. Merci de votre confiance!'
+                },
+                enabled: {
+                    type: Boolean,
+                    default: false
+                }
+            },
+            orderShipped: {
+                message: {
+                    type: String,
+                    default: 'Votre commande #{orderNumber} a été expédiée!'
+                },
+                enabled: {
+                    type: Boolean,
+                    default: false
+                }
+            }
+        }
+    },
+    
+    // SEO Settings
     seo: {
         metaTitle: {
             type: String,
-            default: 'Shifa Parapharmacie - Votre santé, notre priorité'
+            default: 'Shifa - Parapharmacie | Tipaza, Algérie'
         },
         metaDescription: {
             type: String,
-            default: 'Découvrez notre large gamme de produits de parapharmacie en ligne. Livraison rapide partout en Algérie.'
+            default: 'Découvrez notre parapharmacie Shifa à Tipaza. Large choix de produits de santé et beauté. Livraison rapide en Algérie.'
         },
         metaKeywords: {
             type: String,
-            default: 'parapharmacie, santé, beauté, cosmétiques, médicaments, Algérie'
+            default: 'parapharmacie, santé, beauté, cosmétiques, vitamines, Tipaza, Algérie'
         },
-        googleAnalytics: String,
-        facebookPixel: String
+        canonicalUrl: {
+            type: String,
+            default: ''
+        },
+        robotsTxt: {
+            type: String,
+            default: 'User-agent: *\nAllow: /'
+        },
+        googleAnalyticsId: {
+            type: String,
+            default: ''
+        },
+        googleTagManagerId: {
+            type: String,
+            default: ''
+        },
+        facebookPixelId: {
+            type: String,
+            default: ''
+        }
     },
     
-    // Social media
-    socialMedia: {
-        facebook: String,
-        instagram: String,
-        twitter: String,
-        youtube: String,
-        linkedin: String
-    },
-    
-    // Security settings
+    // Security Settings
     security: {
+        allowRegistration: {
+            type: Boolean,
+            default: true
+        },
+        emailVerificationRequired: {
+            type: Boolean,
+            default: false
+        },
+        phoneVerificationRequired: {
+            type: Boolean,
+            default: false
+        },
         maxLoginAttempts: {
             type: Number,
             default: 5,
@@ -166,140 +430,201 @@ const SettingsSchema = new mongoose.Schema({
         },
         lockoutDuration: {
             type: Number,
-            default: 15,
+            default: 15, // minutes
             min: 5,
             max: 60
         },
         sessionTimeout: {
             type: Number,
-            default: 24,
+            default: 30, // days
             min: 1,
-            max: 168
-        },
-        requireEmailVerification: {
-            type: Boolean,
-            default: false
+            max: 365
         }
     },
     
-    // Notification settings
+    // Notifications
     notifications: {
-        newOrderAdmin: {
-            type: Boolean,
-            default: true
+        newOrder: {
+            email: {
+                type: Boolean,
+                default: true
+            },
+            sms: {
+                type: Boolean,
+                default: false
+            }
         },
-        lowStockAlert: {
-            type: Boolean,
-            default: true
+        lowStock: {
+            email: {
+                type: Boolean,
+                default: true
+            },
+            threshold: {
+                type: Number,
+                default: 5,
+                min: 0
+            }
         },
-        lowStockThreshold: {
-            type: Number,
-            default: 10,
-            min: 1
+        newUser: {
+            email: {
+                type: Boolean,
+                default: true
+            }
         }
     },
     
-    // Business settings
-    business: {
-        devise: {
-            type: String,
-            default: 'DA'
-        },
-        langue: {
-            type: String,
-            enum: ['fr', 'ar', 'en'],
-            default: 'fr'
-        },
-        timezone: {
-            type: String,
-            default: 'Africa/Algiers'
-        },
-        numeroRC: String,
-        numeroNIF: String,
-        numeroNIS: String
-    },
-    
-    // Maintenance mode
+    // Maintenance
     maintenance: {
-        actif: {
+        enabled: {
             type: Boolean,
             default: false
         },
         message: {
             type: String,
-            default: 'Site en maintenance. Nous revenons bientôt!'
+            default: 'Site en maintenance. Nous serons bientôt de retour!'
         },
-        dateDebut: Date,
-        dateFin: Date
-    },
-    
-    // Feature flags
-    features: {
-        wishlist: {
-            type: Boolean,
-            default: true
+        allowedIPs: [{
+            type: String
+        }],
+        scheduledStart: {
+            type: Date,
+            default: null
         },
-        reviews: {
-            type: Boolean,
-            default: true
-        },
-        loyaltyProgram: {
-            type: Boolean,
-            default: false
-        },
-        multiLanguage: {
-            type: Boolean,
-            default: false
-        },
-        chatSupport: {
-            type: Boolean,
-            default: true
+        scheduledEnd: {
+            type: Date,
+            default: null
         }
     },
     
-    // Theme settings
-    theme: {
-        primaryColor: {
-            type: String,
-            default: '#10b981'
+    // Advanced Settings
+    advanced: {
+        enableCache: {
+            type: Boolean,
+            default: true
         },
-        secondaryColor: {
-            type: String,
-            default: '#059669'
-        },
-        accentColor: {
-            type: String,
-            default: '#34d399'
-        },
-        fontFamily: {
-            type: String,
-            default: 'Inter'
-        }
-    },
-    
-    // Cache settings
-    cache: {
-        productsCacheTimeout: {
+        cacheTimeout: {
             type: Number,
-            default: 300,
-            min: 60
+            default: 3600, // seconds
+            min: 60,
+            max: 86400
         },
-        categoriesCacheTimeout: {
-            type: Number,
-            default: 3600,
-            min: 300
+        enableCompression: {
+            type: Boolean,
+            default: true
+        },
+        enableLogging: {
+            type: Boolean,
+            default: true
+        },
+        logLevel: {
+            type: String,
+            default: 'info',
+            enum: ['error', 'warn', 'info', 'debug']
+        },
+        backupFrequency: {
+            type: String,
+            default: 'daily',
+            enum: ['hourly', 'daily', 'weekly', 'monthly']
         }
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
 });
 
-// Ensure only one settings document exists
-SettingsSchema.statics.getSettings = async function() {
+// Ensure only one settings document
+SettingsSchema.index({ _id: 1 }, { unique: true });
+
+// Virtual for complete contact info
+SettingsSchema.virtual('contactComplet').get(function() {
+    return {
+        nom: this.siteName,
+        email: this.contact.email,
+        telephone: this.contact.telephone,
+        adresse: this.contact.adresse,
+        ville: this.contact.ville,
+        wilaya: this.contact.wilaya,
+        horaires: this.contact.horaires
+    };
+});
+
+// Virtual for social media links array
+SettingsSchema.virtual('reseauxSociaux').get(function() {
+    const reseaux = [];
+    
+    if (this.socialMedia.facebook) {
+        reseaux.push({ nom: 'Facebook', url: this.socialMedia.facebook, icon: 'fab fa-facebook' });
+    }
+    if (this.socialMedia.instagram) {
+        reseaux.push({ nom: 'Instagram', url: this.socialMedia.instagram, icon: 'fab fa-instagram' });
+    }
+    if (this.socialMedia.twitter) {
+        reseaux.push({ nom: 'Twitter', url: this.socialMedia.twitter, icon: 'fab fa-twitter' });
+    }
+    if (this.socialMedia.youtube) {
+        reseaux.push({ nom: 'YouTube', url: this.socialMedia.youtube, icon: 'fab fa-youtube' });
+    }
+    if (this.socialMedia.linkedin) {
+        reseaux.push({ nom: 'LinkedIn', url: this.socialMedia.linkedin, icon: 'fab fa-linkedin' });
+    }
+    
+    return reseaux;
+});
+
+// Method to get shipping cost for a wilaya
+SettingsSchema.methods.getShippingCost = function(wilaya, orderTotal = 0) {
+    if (orderTotal >= this.shipping.freeShippingThreshold) {
+        return 0;
+    }
+    
+    // Check if wilaya is in available list
+    if (this.shipping.availableWilayas.length > 0 && 
+        !this.shipping.availableWilayas.includes(wilaya)) {
+        return null; // Shipping not available
+    }
+    
+    return this.shipping.standardCost;
+};
+
+// Method to check if feature is enabled
+SettingsSchema.methods.isFeatureEnabled = function(feature) {
+    switch (feature) {
+        case 'registration':
+            return this.security.allowRegistration;
+        case 'emailVerification':
+            return this.security.emailVerificationRequired;
+        case 'phoneVerification':
+            return this.security.phoneVerificationRequired;
+        case 'maintenance':
+            return this.maintenance.enabled;
+        case 'cache':
+            return this.advanced.enableCache;
+        case 'compression':
+            return this.advanced.enableCompression;
+        default:
+            return false;
+    }
+};
+
+// Method to get email template
+SettingsSchema.methods.getEmailTemplate = function(templateName) {
+    const template = this.email.templates[templateName];
+    return template && template.enabled ? template : null;
+};
+
+// Method to get SMS template
+SettingsSchema.methods.getSMSTemplate = function(templateName) {
+    const template = this.sms.templates[templateName];
+    return template && template.enabled ? template : null;
+};
+
+// Static method to get current settings
+SettingsSchema.statics.getCurrent = async function() {
     let settings = await this.findOne();
     
+    // Create default settings if none exist
     if (!settings) {
-        // Create default settings if none exist
         settings = new this({});
         await settings.save();
     }
@@ -307,120 +632,33 @@ SettingsSchema.statics.getSettings = async function() {
     return settings;
 };
 
-// Update settings method
-SettingsSchema.statics.updateSettings = async function(updates) {
-    let settings = await this.findOne();
-    
-    if (!settings) {
-        settings = new this(updates);
-    } else {
-        // Deep merge updates
-        Object.keys(updates).forEach(key => {
-            if (typeof updates[key] === 'object' && updates[key] !== null && !Array.isArray(updates[key])) {
-                settings[key] = { ...settings[key].toObject(), ...updates[key] };
-            } else {
-                settings[key] = updates[key];
+// Pre-save middleware
+SettingsSchema.pre('save', function(next) {
+    // Ensure shipping methods have default values
+    if (!this.shipping.shippingMethods || this.shipping.shippingMethods.length === 0) {
+        this.shipping.shippingMethods = [
+            {
+                nom: 'Livraison standard',
+                prix: this.shipping.standardCost,
+                delai: this.shipping.estimatedDays,
+                description: 'Livraison normale',
+                actif: true
             }
-        });
-    }
-    
-    await settings.save();
-    return settings;
-};
-
-// Get specific setting
-SettingsSchema.statics.getSetting = async function(path) {
-    const settings = await this.getSettings();
-    
-    // Handle nested paths like 'shipping.fraisLivraisonDefaut'
-    const keys = path.split('.');
-    let value = settings;
-    
-    for (const key of keys) {
-        value = value[key];
-        if (value === undefined) break;
-    }
-    
-    return value;
-};
-
-// Set specific setting
-SettingsSchema.statics.setSetting = async function(path, value) {
-    const keys = path.split('.');
-    const updateObj = {};
-    
-    // Build nested update object
-    let current = updateObj;
-    for (let i = 0; i < keys.length - 1; i++) {
-        current[keys[i]] = {};
-        current = current[keys[i]];
-    }
-    current[keys[keys.length - 1]] = value;
-    
-    return await this.updateSettings(updateObj);
-};
-
-// Initialize default wilayas
-SettingsSchema.statics.initializeDefaultWilayas = async function() {
-    const settings = await this.getSettings();
-    
-    if (!settings.shipping.wilayasDisponibles || settings.shipping.wilayasDisponibles.length === 0) {
-        const wilayasAlgerie = [
-            { nom: 'Adrar', fraisLivraison: 800, delaiLivraison: '3-8 jours' },
-            { nom: 'Chlef', fraisLivraison: 600, delaiLivraison: '2-5 jours' },
-            { nom: 'Laghouat', fraisLivraison: 700, delaiLivraison: '3-6 jours' },
-            { nom: 'Oum El Bouaghi', fraisLivraison: 650, delaiLivraison: '2-6 jours' },
-            { nom: 'Batna', fraisLivraison: 650, delaiLivraison: '2-6 jours' },
-            { nom: 'Béjaïa', fraisLivraison: 600, delaiLivraison: '2-5 jours' },
-            { nom: 'Biskra', fraisLivraison: 700, delaiLivraison: '3-6 jours' },
-            { nom: 'Béchar', fraisLivraison: 900, delaiLivraison: '4-8 jours' },
-            { nom: 'Blida', fraisLivraison: 400, delaiLivraison: '1-3 jours' },
-            { nom: 'Bouira', fraisLivraison: 550, delaiLivraison: '2-4 jours' },
-            { nom: 'Tamanrasset', fraisLivraison: 1200, delaiLivraison: '5-10 jours' },
-            { nom: 'Tébessa', fraisLivraison: 750, delaiLivraison: '3-7 jours' },
-            { nom: 'Tlemcen', fraisLivraison: 700, delaiLivraison: '2-6 jours' },
-            { nom: 'Tiaret', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'Tizi Ouzou', fraisLivraison: 500, delaiLivraison: '1-4 jours' },
-            { nom: 'Alger', fraisLivraison: 300, delaiLivraison: '1-2 jours' },
-            { nom: 'Djelfa', fraisLivraison: 650, delaiLivraison: '2-6 jours' },
-            { nom: 'Jijel', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'Sétif', fraisLivraison: 600, delaiLivraison: '2-5 jours' },
-            { nom: 'Saïda', fraisLivraison: 700, delaiLivraison: '2-6 jours' },
-            { nom: 'Skikda', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'Sidi Bel Abbès', fraisLivraison: 700, delaiLivraison: '2-6 jours' },
-            { nom: 'Annaba', fraisLivraison: 700, delaiLivraison: '2-6 jours' },
-            { nom: 'Guelma', fraisLivraison: 700, delaiLivraison: '2-6 jours' },
-            { nom: 'Constantine', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'Médéa', fraisLivraison: 550, delaiLivraison: '2-4 jours' },
-            { nom: 'Mostaganem', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'M\'Sila', fraisLivraison: 600, delaiLivraison: '2-5 jours' },
-            { nom: 'Mascara', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'Ouargla', fraisLivraison: 800, delaiLivraison: '3-7 jours' },
-            { nom: 'Oran', fraisLivraison: 600, delaiLivraison: '2-5 jours' },
-            { nom: 'El Bayadh', fraisLivraison: 750, delaiLivraison: '3-6 jours' },
-            { nom: 'Illizi', fraisLivraison: 1000, delaiLivraison: '4-9 jours' },
-            { nom: 'Bordj Bou Arréridj', fraisLivraison: 600, delaiLivraison: '2-5 jours' },
-            { nom: 'Boumerdès', fraisLivraison: 400, delaiLivraison: '1-3 jours' },
-            { nom: 'El Tarf', fraisLivraison: 750, delaiLivraison: '3-6 jours' },
-            { nom: 'Tindouf', fraisLivraison: 1100, delaiLivraison: '5-9 jours' },
-            { nom: 'Tissemsilt', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'El Oued', fraisLivraison: 750, delaiLivraison: '3-6 jours' },
-            { nom: 'Khenchela', fraisLivraison: 700, delaiLivraison: '3-6 jours' },
-            { nom: 'Souk Ahras', fraisLivraison: 750, delaiLivraison: '3-6 jours' },
-            { nom: 'Tipaza', fraisLivraison: 400, delaiLivraison: '1-3 jours' },
-            { nom: 'Mila', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'Aïn Defla', fraisLivraison: 550, delaiLivraison: '2-4 jours' },
-            { nom: 'Naâma', fraisLivraison: 800, delaiLivraison: '3-7 jours' },
-            { nom: 'Aïn Témouchent', fraisLivraison: 650, delaiLivraison: '2-5 jours' },
-            { nom: 'Ghardaïa', fraisLivraison: 750, delaiLivraison: '3-6 jours' },
-            { nom: 'Relizane', fraisLivraison: 650, delaiLivraison: '2-5 jours' }
         ];
-        
-        settings.shipping.wilayasDisponibles = wilayasAlgerie;
-        await settings.save();
     }
     
-    return settings;
-};
+    // Ensure payment methods have default values
+    if (!this.payment.methods || this.payment.methods.length === 0) {
+        this.payment.methods = [
+            {
+                nom: 'Paiement à la livraison',
+                actif: true,
+                configuration: {}
+            }
+        ];
+    }
+    
+    next();
+});
 
 module.exports = mongoose.model('Settings', SettingsSchema);

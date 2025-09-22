@@ -6,28 +6,20 @@ require('dotenv').config();
 
 const app = express();
 
-// Enhanced logging
-const log = (message, type = 'INFO') => {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [${type}] ${message}`);
-};
-
-log('Starting Shifa Parapharmacie Backend Server...');
-
-// CORS configuration - Enhanced
+// Enhanced CORS configuration
 const corsOptions = {
     origin: [
         'http://localhost:3000',
         'http://localhost:3001',
+        'http://localhost:5173',
         'http://127.0.0.1:3000',
         'http://127.0.0.1:3001',
-        'http://localhost:5173',
+        'http://127.0.0.1:5173',
         'https://parapharmacieshifa.com',
         'http://parapharmacieshifa.com',
-        'https://anes255.github.io',
-        'http://anes255.github.io'
-    ],
-    credentials: false,
+        process.env.FRONTEND_URL
+    ].filter(Boolean),
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: [
         'Content-Type', 
@@ -42,445 +34,338 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// Enhanced middleware with error handling
-app.use(express.json({ 
-    limit: '10mb',
-    verify: (req, res, buf, encoding) => {
-        try {
-            JSON.parse(buf);
-        } catch (err) {
-            log(`Invalid JSON in request: ${err.message}`, 'ERROR');
-            res.status(400).json({ message: 'Invalid JSON format' });
-            return;
-        }
-    }
-}));
-
+// Enhanced middleware
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Enhanced request logging
+// Request logging with timestamp
 app.use((req, res, next) => {
-    const start = Date.now();
-    
-    // Log request
-    log(`${req.method} ${req.path} - IP: ${req.ip} - User-Agent: ${req.get('User-Agent')?.substring(0, 50)}...`);
-    
-    // Log request body for debugging (only for POST/PUT)
-    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.path.includes('/orders')) {
-        log(`Request Body: ${JSON.stringify(req.body, null, 2)}`, 'DEBUG');
-    }
-    
-    // Log response time
-    res.on('finish', () => {
-        const duration = Date.now() - start;
-        log(`${req.method} ${req.path} - ${res.statusCode} - ${duration}ms`);
-    });
-    
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path} - IP: ${req.ip}`);
     next();
 });
 
-// Database connection status
-let dbConnected = false;
-let dbError = null;
+// Security headers
+app.use((req, res, next) => {
+    res.header('X-Content-Type-Options', 'nosniff');
+    res.header('X-Frame-Options', 'DENY');
+    res.header('X-XSS-Protection', '1; mode=block');
+    next();
+});
 
-// ROOT ROUTE with enhanced status
+// Root route with enhanced info
 app.get('/', (req, res) => {
     res.json({
-        message: 'Shifa Parapharmacie Backend API',
+        name: 'Shifa Parapharmacie API',
+        version: '2.0.0',
         status: 'running',
-        database: dbConnected ? 'connected' : 'disconnected',
-        databaseError: dbError,
+        description: 'Backend API for Shifa Parapharmacie e-commerce platform',
+        endpoints: {
+            health: '/api/health',
+            auth: '/api/auth/*',
+            products: '/api/products/*',
+            orders: '/api/orders/*',
+            admin: '/api/admin/*',
+            settings: '/api/settings/*'
+        },
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        version: '1.0.0'
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
-// Enhanced health check with database status
+// Enhanced health check
 app.get('/api/health', async (req, res) => {
-    const health = {
-        status: 'running',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        database: {
-            connected: dbConnected,
-            error: dbError,
-            readyState: mongoose.connection.readyState
-        },
-        memory: process.memoryUsage(),
-        routes: {
-            auth: false,
-            products: false,
-            orders: false,
-            admin: false,
-            settings: false
-        }
-    };
-    
-    // Test database connection
     try {
-        if (dbConnected) {
-            await mongoose.connection.db.admin().ping();
-            health.database.ping = 'success';
-        }
-    } catch (error) {
-        health.database.ping = 'failed';
-        health.database.pingError = error.message;
-    }
-    
-    res.json(health);
-});
-
-// Debug endpoint for testing order creation
-app.post('/api/debug/order-test', async (req, res) => {
-    try {
-        log('Order test endpoint called', 'DEBUG');
-        log(`Request body: ${JSON.stringify(req.body, null, 2)}`, 'DEBUG');
+        // Check database connection
+        const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
         
-        // Test basic order model creation without saving
-        const Order = require('./models/Order');
+        // System info
+        const memoryUsage = process.memoryUsage();
+        const uptime = process.uptime();
         
-        const testOrder = new Order({
-            numeroCommande: `TEST${Date.now()}`,
-            client: {
-                prenom: 'Test',
-                nom: 'User',
-                email: 'test@example.com',
-                telephone: '0123456789',
-                adresse: 'Test Address',
-                wilaya: 'Tipaza'
-            },
-            articles: [{
-                productId: 'test123',
-                nom: 'Test Product',
-                prix: 100,
-                quantite: 1
-            }],
-            sousTotal: 100,
-            fraisLivraison: 0,
-            total: 100
-        });
-        
-        // Validate without saving
-        const validationError = testOrder.validateSync();
-        if (validationError) {
-            log(`Validation error: ${JSON.stringify(validationError.errors)}`, 'ERROR');
-            return res.status(400).json({
-                message: 'Validation failed',
-                errors: validationError.errors
-            });
-        }
-        
-        log('Test order validation passed', 'DEBUG');
         res.json({
-            message: 'Order test passed',
-            validationResult: 'success',
-            testOrder: testOrder.toObject()
+            status: 'healthy',
+            database: dbStatus,
+            timestamp: new Date().toISOString(),
+            uptime: Math.floor(uptime),
+            memory: {
+                used: Math.round(memoryUsage.heapUsed / 1024 / 1024) + ' MB',
+                total: Math.round(memoryUsage.heapTotal / 1024 / 1024) + ' MB'
+            },
+            environment: process.env.NODE_ENV || 'development',
+            version: '2.0.0'
         });
-        
     } catch (error) {
-        log(`Order test error: ${error.message}`, 'ERROR');
-        log(`Error stack: ${error.stack}`, 'ERROR');
-        res.status(500).json({
-            message: 'Order test failed',
+        res.status(503).json({
+            status: 'unhealthy',
             error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            timestamp: new Date().toISOString()
         });
     }
 });
 
-// ROUTE LOADING with enhanced error handling
+// Route loading with enhanced error handling
 const loadRoutes = () => {
     try {
+        // Auth routes
         const authRoutes = require('./routes/auth');
         app.use('/api/auth', authRoutes);
-        log('Auth routes loaded successfully');
+        console.log('✅ Auth routes loaded successfully');
     } catch (error) {
-        log(`Auth routes failed: ${error.message}`, 'ERROR');
-        log(`Auth routes stack: ${error.stack}`, 'ERROR');
+        console.error('❌ Failed to load auth routes:', error.message);
     }
 
     try {
+        // Product routes
         const productRoutes = require('./routes/products');
         app.use('/api/products', productRoutes);
-        log('Product routes loaded successfully');
+        console.log('✅ Product routes loaded successfully');
     } catch (error) {
-        log(`Product routes failed: ${error.message}`, 'ERROR');
-        log(`Product routes stack: ${error.stack}`, 'ERROR');
+        console.error('❌ Failed to load product routes:', error.message);
     }
 
     try {
+        // Order routes
         const orderRoutes = require('./routes/orders');
         app.use('/api/orders', orderRoutes);
-        log('Order routes loaded successfully');
+        console.log('✅ Order routes loaded successfully');
     } catch (error) {
-        log(`Order routes failed: ${error.message}`, 'ERROR');
-        log(`Order routes stack: ${error.stack}`, 'ERROR');
+        console.error('❌ Failed to load order routes:', error.message);
     }
 
     try {
+        // Admin routes
         const adminRoutes = require('./routes/admin');
         app.use('/api/admin', adminRoutes);
-        log('Admin routes loaded successfully');
+        console.log('✅ Admin routes loaded successfully');
     } catch (error) {
-        log(`Admin routes failed: ${error.message}`, 'ERROR');
-        log(`Admin routes stack: ${error.stack}`, 'ERROR');
+        console.error('❌ Failed to load admin routes:', error.message);
     }
 
     try {
+        // Settings routes
         const settingsRoutes = require('./routes/settings');
         app.use('/api/settings', settingsRoutes);
-        log('Settings routes loaded successfully');
+        console.log('✅ Settings routes loaded successfully');
     } catch (error) {
-        log(`Settings routes failed: ${error.message}`, 'ERROR');
-        log(`Settings routes stack: ${error.stack}`, 'ERROR');
+        console.error('❌ Failed to load settings routes:', error.message);
     }
 };
 
-// Enhanced MongoDB Connection with better error handling
+// MongoDB connection with retry logic
 const connectDB = async () => {
     try {
-        log('Attempting MongoDB connection...');
+        console.log('🔗 Connecting to MongoDB...');
         
         if (!process.env.MONGODB_URI) {
-            throw new Error('MONGODB_URI environment variable not set');
+            throw new Error('MONGODB_URI environment variable is not set');
         }
         
-        log(`MongoDB URI: ${process.env.MONGODB_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')}`);
-        
-        // Enhanced connection options
-        const options = {
+        const conn = await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true,
-            maxPoolSize: 10,
             serverSelectionTimeoutMS: 5000,
             socketTimeoutMS: 45000,
-            family: 4
-        };
-        
-        await mongoose.connect(process.env.MONGODB_URI, options);
-        
-        dbConnected = true;
-        dbError = null;
-        log('MongoDB connected successfully');
-        
-        // Add connection event listeners
-        mongoose.connection.on('error', (error) => {
-            dbError = error.message;
-            log(`MongoDB error: ${error.message}`, 'ERROR');
+            maxPoolSize: 10,
+            bufferCommands: false,
+            bufferMaxEntries: 0
         });
         
-        mongoose.connection.on('disconnected', () => {
-            dbConnected = false;
-            log('MongoDB disconnected', 'WARN');
-        });
+        console.log('✅ MongoDB connected successfully');
+        console.log(`📍 Database: ${conn.connection.name}`);
         
-        mongoose.connection.on('reconnected', () => {
-            dbConnected = true;
-            dbError = null;
-            log('MongoDB reconnected');
-        });
-        
-        // Test the connection
-        await mongoose.connection.db.admin().ping();
-        log('MongoDB ping successful');
-        
-        // Initialize admin user
-        await initializeAdmin();
-        
-        // Load routes after successful DB connection
-        loadRoutes();
+        // Initialize default data
+        await initializeDefaultData();
         
     } catch (error) {
-        dbConnected = false;
-        dbError = error.message;
-        log(`MongoDB connection failed: ${error.message}`, 'ERROR');
-        log(`MongoDB error stack: ${error.stack}`, 'ERROR');
+        console.error('❌ MongoDB connection failed:', error.message);
         
-        // Retry connection after 10 seconds
-        log('Retrying MongoDB connection in 10 seconds...', 'WARN');
+        // Retry connection after delay
+        console.log('🔄 Retrying connection in 10 seconds...');
         setTimeout(connectDB, 10000);
     }
 };
 
-// Enhanced admin initialization
-async function initializeAdmin() {
+// Initialize default data (admin user, settings, etc.)
+const initializeDefaultData = async () => {
     try {
-        log('Initializing admin user...');
-        
-        const User = require('./models/User');
-        const bcrypt = require('bcryptjs');
-        
-        let admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
-        if (!admin) {
-            log('Creating admin user...');
-            
-            const salt = bcrypt.genSaltSync(12);
-            const hashedPassword = bcrypt.hashSync('anesaya75', salt);
-            
-            admin = new User({
-                nom: 'Gaher',
-                prenom: 'Parapharmacie',
-                email: 'pharmaciegaher@gmail.com',
-                telephone: '+213123456789',
-                adresse: 'Tipaza, Algérie',
-                wilaya: 'Tipaza',
-                password: hashedPassword,
-                role: 'admin',
-                dateInscription: new Date()
-            });
-            
-            await admin.save();
-            log('Admin user created successfully');
-        } else {
-            log('Admin user already exists');
-        }
+        await initializeAdminUser();
+        await initializeSettings();
+        console.log('✅ Default data initialized');
     } catch (error) {
-        log(`Admin initialization failed: ${error.message}`, 'ERROR');
-        log(`Admin error stack: ${error.stack}`, 'ERROR');
+        console.error('❌ Failed to initialize default data:', error.message);
     }
-}
+};
 
-// Enhanced error handling middleware
+// Initialize admin user
+const initializeAdminUser = async () => {
+    try {
+        const User = require('./models/User');
+        
+        const existingAdmin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
+        if (existingAdmin) {
+            console.log('👤 Admin user already exists');
+            return;
+        }
+        
+        const admin = new User({
+            nom: 'Gaher',
+            prenom: 'Parapharmacie',
+            email: 'pharmaciegaher@gmail.com',
+            password: 'anesaya75', // Will be hashed automatically
+            telephone: '+213123456789',
+            adresse: 'Tipaza, Algérie',
+            ville: 'Tipaza',
+            wilaya: 'Tipaza',
+            role: 'admin',
+            actif: true,
+            dateInscription: new Date()
+        });
+        
+        await admin.save();
+        console.log('👤 Admin user created successfully');
+        
+    } catch (error) {
+        console.error('❌ Failed to create admin user:', error.message);
+    }
+};
+
+// Initialize default settings
+const initializeSettings = async () => {
+    try {
+        const Settings = require('./models/Settings');
+        
+        const existingSettings = await Settings.findOne();
+        if (existingSettings) {
+            console.log('⚙️ Settings already exist');
+            return;
+        }
+        
+        const defaultSettings = new Settings({
+            siteName: 'Shifa - Parapharmacie',
+            siteDescription: 'Votre parapharmacie de confiance à Tipaza, Algérie',
+            contact: {
+                email: 'pharmaciegaher@gmail.com',
+                telephone: '+213 123 456 789',
+                adresse: 'Tipaza, Algérie',
+                horaires: 'Lun-Sam: 8h-20h, Dim: 9h-18h'
+            },
+            socialMedia: {
+                facebook: 'https://www.facebook.com/pharmaciegaher/?locale=mg_MG',
+                instagram: 'https://www.instagram.com/pharmaciegaher/',
+                youtube: '',
+                linkedin: ''
+            },
+            shipping: {
+                standardCost: 300,
+                freeShippingThreshold: 5000,
+                estimatedDays: '2-5 jours ouvrables'
+            },
+            currency: 'DA',
+            language: 'fr',
+            timezone: 'Africa/Algiers'
+        });
+        
+        await defaultSettings.save();
+        console.log('⚙️ Default settings created successfully');
+        
+    } catch (error) {
+        console.error('❌ Failed to create default settings:', error.message);
+    }
+};
+
+// Error handling middleware
 app.use((error, req, res, next) => {
-    log(`Unhandled error: ${error.message}`, 'ERROR');
-    log(`Error stack: ${error.stack}`, 'ERROR');
-    log(`Request: ${req.method} ${req.path}`, 'ERROR');
-    log(`Request body: ${JSON.stringify(req.body)}`, 'ERROR');
+    console.error('🚨 Server error:', {
+        message: error.message,
+        stack: error.stack,
+        url: req.url,
+        method: req.method,
+        timestamp: new Date().toISOString()
+    });
     
-    // Determine error type and respond appropriately
-    if (error.name === 'ValidationError') {
-        return res.status(400).json({
-            message: 'Validation error',
-            details: Object.values(error.errors).map(err => err.message),
-            timestamp: new Date().toISOString()
-        });
-    }
+    // Don't leak error details in production
+    const isDevelopment = process.env.NODE_ENV === 'development';
     
-    if (error.name === 'CastError') {
-        return res.status(400).json({
-            message: 'Invalid data format',
-            field: error.path,
-            value: error.value,
-            timestamp: new Date().toISOString()
-        });
-    }
-    
-    if (error.code === 11000) {
-        return res.status(409).json({
-            message: 'Duplicate entry',
-            field: Object.keys(error.keyPattern)[0],
-            timestamp: new Date().toISOString()
-        });
-    }
-    
-    // Generic server error
-    res.status(500).json({ 
-        message: 'Internal server error',
-        timestamp: new Date().toISOString(),
-        requestId: req.headers['x-request-id'] || 'unknown',
-        error: process.env.NODE_ENV === 'development' ? {
-            message: error.message,
-            stack: error.stack
-        } : undefined
+    res.status(error.status || 500).json({
+        message: isDevelopment ? error.message : 'Erreur serveur interne',
+        ...(isDevelopment && { stack: error.stack }),
+        timestamp: new Date().toISOString()
     });
 });
 
-// Enhanced 404 handler
+// 404 handler with helpful info
 app.use('*', (req, res) => {
-    log(`404 - Route not found: ${req.method} ${req.originalUrl}`, 'WARN');
     res.status(404).json({
-        message: 'Route not found',
+        message: 'Endpoint non trouvé',
         path: req.originalUrl,
         method: req.method,
-        timestamp: new Date().toISOString(),
-        availableRoutes: [
+        availableEndpoints: [
             'GET /',
             'GET /api/health',
-            'POST /api/debug/order-test',
             'POST /api/auth/login',
             'POST /api/auth/register',
             'GET /api/products',
-            'POST /api/orders',
+            'GET /api/orders',
             'GET /api/admin/dashboard'
-        ]
+        ],
+        timestamp: new Date().toISOString()
     });
 });
 
-// Graceful shutdown handling
-process.on('SIGTERM', async () => {
-    log('SIGTERM received, shutting down gracefully...');
-    
-    try {
-        await mongoose.connection.close();
-        log('MongoDB connection closed');
-    } catch (error) {
-        log(`Error closing MongoDB: ${error.message}`, 'ERROR');
-    }
-    
-    process.exit(0);
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('📴 SIGTERM received, shutting down gracefully...');
+    mongoose.connection.close(() => {
+        console.log('📴 MongoDB connection closed');
+        process.exit(0);
+    });
 });
 
-process.on('SIGINT', async () => {
-    log('SIGINT received, shutting down gracefully...');
-    
-    try {
-        await mongoose.connection.close();
-        log('MongoDB connection closed');
-    } catch (error) {
-        log(`Error closing MongoDB: ${error.message}`, 'ERROR');
-    }
-    
-    process.exit(0);
+process.on('SIGINT', () => {
+    console.log('📴 SIGINT received, shutting down gracefully...');
+    mongoose.connection.close(() => {
+        console.log('📴 MongoDB connection closed');
+        process.exit(0);
+    });
 });
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-    log(`Uncaught Exception: ${error.message}`, 'ERROR');
-    log(`Stack: ${error.stack}`, 'ERROR');
-    process.exit(1);
+// Database connection event listeners
+mongoose.connection.on('error', (err) => {
+    console.error('🚨 MongoDB connection error:', err);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-    log(`Unhandled Rejection at: ${promise}, reason: ${reason}`, 'ERROR');
-    process.exit(1);
+mongoose.connection.on('disconnected', () => {
+    console.warn('⚠️ MongoDB disconnected');
 });
+
+mongoose.connection.on('reconnected', () => {
+    console.log('🔄 MongoDB reconnected');
+});
+
+// Load routes
+loadRoutes();
 
 // Connect to database
 connectDB();
 
 // Start server
 const PORT = process.env.PORT || 5000;
-
-const server = app.listen(PORT, '0.0.0.0', () => {
-    log(`Server running on port ${PORT}`);
-    log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    log(`Health check: http://localhost:${PORT}/api/health`);
-    log(`Debug endpoint: http://localhost:${PORT}/api/debug/order-test`);
-    log(`Process ID: ${process.pid}`);
-    log(`Node version: ${process.version}`);
+const server = app.listen(PORT, () => {
+    console.log(`🚀 Shifa Parapharmacie server running on port ${PORT}`);
+    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`📱 API base URL: http://localhost:${PORT}/api`);
+    console.log(`⏰ Started at: ${new Date().toISOString()}`);
 });
 
-// Server error handling
+// Handle server startup errors
 server.on('error', (error) => {
-    if (error.syscall !== 'listen') {
-        throw error;
-    }
-    
-    const bind = typeof PORT === 'string' ? 'Pipe ' + PORT : 'Port ' + PORT;
-    
-    switch (error.code) {
-        case 'EACCES':
-            log(`${bind} requires elevated privileges`, 'ERROR');
-            process.exit(1);
-            break;
-        case 'EADDRINUSE':
-            log(`${bind} is already in use`, 'ERROR');
-            process.exit(1);
-            break;
-        default:
-            throw error;
+    if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use`);
+        process.exit(1);
+    } else {
+        console.error('❌ Server startup error:', error);
+        process.exit(1);
     }
 });
 

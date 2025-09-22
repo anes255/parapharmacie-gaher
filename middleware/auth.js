@@ -1,301 +1,308 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-// Middleware d'authentification
+// Main authentication middleware
 const auth = async (req, res, next) => {
     try {
-        // Récupérer le token depuis l'en-tête
+        // Get token from header
         const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
         
-        // Vérifier si le token existe
         if (!token) {
             return res.status(401).json({
-                message: 'Accès refusé. Token manquant.'
+                message: 'Accès refusé. Token d\'authentification requis.'
             });
         }
         
-        try {
-            // Vérifier et décoder le token
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-            
-            try {
-                // Try to get User model
-                const User = require('../models/User');
-                
-                // Récupérer l'utilisateur depuis la base de données
-                const user = await User.findById(decoded.id);
-                
-                if (!user) {
-                    return res.status(401).json({
-                        message: 'Token invalide. Utilisateur non trouvé.'
-                    });
-                }
-                
-                if (!user.actif) {
-                    return res.status(401).json({
-                        message: 'Compte désactivé.'
-                    });
-                }
-                
-                // Ajouter l'utilisateur à la requête
-                req.user = {
-                    id: user._id,
-                    email: user.email,
-                    nom: user.nom,
-                    prenom: user.prenom,
-                    role: user.role,
-                    actif: user.actif
-                };
-                
-                next();
-                
-            } catch (dbError) {
-                console.error('Database error in auth:', dbError.message);
-                
-                // Fallback to token data if database unavailable
-                req.user = {
-                    id: decoded.id,
-                    email: decoded.email,
-                    nom: decoded.nom || '',
-                    prenom: decoded.prenom || '',
-                    role: decoded.role || 'user',
-                    actif: true
-                };
-                
-                next();
-            }
-            
-        } catch (jwtError) {
-            console.error('JWT Error:', jwtError.message);
-            
-            if (jwtError.name === 'TokenExpiredError') {
-                return res.status(401).json({
-                    message: 'Token expiré. Veuillez vous reconnecter.'
-                });
-            } else if (jwtError.name === 'JsonWebTokenError') {
-                return res.status(401).json({
-                    message: 'Token invalide.'
-                });
-            } else {
-                return res.status(401).json({
-                    message: 'Erreur de vérification du token.'
-                });
-            }
+        // Verify token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+        
+        // Get user from database
+        const user = await User.findById(decoded.id);
+        
+        if (!user) {
+            return res.status(401).json({
+                message: 'Token invalide. Utilisateur non trouvé.'
+            });
         }
+        
+        if (!user.actif) {
+            return res.status(401).json({
+                message: 'Compte désactivé.'
+            });
+        }
+        
+        // Add user to request
+        req.user = user;
+        req.token = token;
+        
+        next();
         
     } catch (error) {
         console.error('Auth middleware error:', error);
-        res.status(500).json({
-            message: 'Erreur serveur lors de l\'authentification'
+        
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                message: 'Token invalide.'
+            });
+        } else if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                message: 'Token expiré. Veuillez vous reconnecter.'
+            });
+        } else {
+            return res.status(500).json({
+                message: 'Erreur d\'authentification.'
+            });
+        }
+    }
+};
+
+// Admin authentication middleware
+const adminAuth = async (req, res, next) => {
+    try {
+        // First run regular auth
+        await new Promise((resolve, reject) => {
+            auth(req, res, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès refusé. Droits administrateur requis.'
+            });
+        }
+        
+        next();
+        
+    } catch (error) {
+        console.error('Admin auth middleware error:', error);
+        return res.status(401).json({
+            message: 'Erreur d\'authentification administrateur.'
         });
     }
 };
 
-// Middleware optionnel d'authentification (ne rejette pas si pas de token)
+// Optional authentication middleware (doesn't fail if no token)
 const optionalAuth = async (req, res, next) => {
     try {
         const token = req.header('x-auth-token') || req.header('Authorization')?.replace('Bearer ', '');
         
         if (!token) {
-            // Pas de token, continuer sans utilisateur
             req.user = null;
             return next();
         }
         
-        try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
-            
-            try {
-                const User = require('../models/User');
-                const user = await User.findById(decoded.id);
-                
-                if (user && user.actif) {
-                    req.user = {
-                        id: user._id,
-                        email: user.email,
-                        nom: user.nom,
-                        prenom: user.prenom,
-                        role: user.role,
-                        actif: user.actif
-                    };
-                } else {
-                    req.user = null;
-                }
-            } catch (dbError) {
-                // Use token data if DB is unavailable
-                req.user = {
-                    id: decoded.id,
-                    email: decoded.email,
-                    nom: decoded.nom || '',
-                    prenom: decoded.prenom || '',
-                    role: decoded.role || 'user',
-                    actif: true
-                };
-            }
-        } catch (jwtError) {
-            // Token invalide, continuer sans utilisateur
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+        const user = await User.findById(decoded.id);
+        
+        if (user && user.actif) {
+            req.user = user;
+            req.token = token;
+        } else {
             req.user = null;
         }
         
         next();
         
     } catch (error) {
-        console.error('Optional auth middleware error:', error);
+        // If token is invalid, continue without user
         req.user = null;
         next();
     }
 };
 
-// Middleware pour vérifier le rôle admin
-const requireAdmin = (req, res, next) => {
-    if (!req.user) {
-        return res.status(401).json({
-            message: 'Authentification requise'
-        });
-    }
-    
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({
-            message: 'Accès refusé. Droits administrateur requis.'
-        });
-    }
-    
-    next();
-};
-
-// Middleware pour vérifier que l'utilisateur peut accéder à une ressource
-const requireOwnershipOrAdmin = (resourceUserIdField = 'userId') => {
-    return (req, res, next) => {
-        if (!req.user) {
-            return res.status(401).json({
-                message: 'Authentification requise'
-            });
-        }
-        
-        // L'admin peut accéder à tout
-        if (req.user.role === 'admin') {
-            return next();
-        }
-        
-        // Vérifier la propriété de la ressource
-        const resourceUserId = req.params[resourceUserIdField] || req.body[resourceUserIdField];
-        
-        if (!resourceUserId) {
-            return res.status(400).json({
-                message: 'ID utilisateur manquant dans la requête'
-            });
-        }
-        
-        if (resourceUserId !== req.user.id.toString()) {
-            return res.status(403).json({
-                message: 'Accès refusé. Vous ne pouvez accéder qu\'à vos propres ressources.'
-            });
-        }
-        
-        next();
-    };
-};
-
-// Middleware pour limiter les tentatives de connexion
-const rateLimitAuth = () => {
-    const attempts = new Map();
-    const MAX_ATTEMPTS = 5;
-    const WINDOW_TIME = 15 * 60 * 1000; // 15 minutes
+// Rate limiting middleware
+const rateLimiter = (options = {}) => {
+    const { windowMs = 15 * 60 * 1000, max = 100, message = 'Trop de requêtes' } = options;
+    const requests = new Map();
     
     return (req, res, next) => {
-        const identifier = req.ip + ':' + (req.body.email || req.body.telephone || '');
+        const key = req.ip;
         const now = Date.now();
+        const windowStart = now - windowMs;
         
-        if (!attempts.has(identifier)) {
-            attempts.set(identifier, { count: 1, firstAttempt: now });
-            return next();
-        }
+        // Clean old entries
+        const userRequests = requests.get(key) || [];
+        const validRequests = userRequests.filter(timestamp => timestamp > windowStart);
         
-        const userAttempts = attempts.get(identifier);
-        
-        // Réinitialiser si la fenêtre de temps est écoulée
-        if (now - userAttempts.firstAttempt > WINDOW_TIME) {
-            attempts.set(identifier, { count: 1, firstAttempt: now });
-            return next();
-        }
-        
-        // Vérifier si la limite est atteinte
-        if (userAttempts.count >= MAX_ATTEMPTS) {
-            const timeLeft = Math.ceil((WINDOW_TIME - (now - userAttempts.firstAttempt)) / 1000 / 60);
+        if (validRequests.length >= max) {
             return res.status(429).json({
-                message: `Trop de tentatives de connexion. Réessayez dans ${timeLeft} minutes.`
+                message: message,
+                retryAfter: Math.ceil((validRequests[0] + windowMs - now) / 1000)
             });
         }
         
-        // Incrémenter le compteur
-        userAttempts.count++;
-        attempts.set(identifier, userAttempts);
+        validRequests.push(now);
+        requests.set(key, validRequests);
         
         next();
     };
 };
 
-// Middleware pour enregistrer les tentatives de connexion échouées
-const logFailedAuth = (req, res, next) => {
-    const originalSend = res.send;
-    
-    res.send = function(data) {
-        // Si c'est une erreur d'authentification, l'enregistrer
-        if (res.statusCode === 401 || res.statusCode === 403) {
-            console.log(`🚫 Failed auth attempt: ${req.method} ${req.path} from ${req.ip} - Status: ${res.statusCode}`);
-            
-            if (req.body.email) {
-                console.log(`   Email: ${req.body.email}`);
-            }
-        }
-        
-        return originalSend.call(this, data);
-    };
-    
-    next();
-};
-
-// Middleware pour mettre à jour la dernière activité
-const updateLastActivity = async (req, res, next) => {
-    if (req.user && req.user.id) {
+// User activity tracking middleware
+const trackActivity = async (req, res, next) => {
+    if (req.user) {
         try {
-            // Mettre à jour en arrière-plan
+            // Update last connection without waiting
             setImmediate(async () => {
                 try {
-                    const User = require('../models/User');
-                    await User.findByIdAndUpdate(req.user.id, {
-                        dernierConnexion: new Date()
-                    });
+                    await req.user.updateLastConnection(
+                        req.ip,
+                        req.get('User-Agent') || ''
+                    );
                 } catch (error) {
-                    console.error('Error updating last activity:', error);
+                    console.error('Failed to track user activity:', error);
                 }
             });
         } catch (error) {
-            // Ne pas faire échouer la requête si la mise à jour échoue
-            console.error('Error in updateLastActivity:', error);
+            console.error('Activity tracking error:', error);
         }
     }
     
     next();
 };
 
-// Middleware pour extraire les informations du client
-const extractClientInfo = (req, res, next) => {
-    req.clientInfo = {
-        ip: req.ip || req.connection.remoteAddress || req.socket.remoteAddress,
-        userAgent: req.get('User-Agent') || '',
-        timestamp: new Date()
+// Role-based access control
+const requireRole = (...roles) => {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({
+                message: 'Authentification requise.'
+            });
+        }
+        
+        if (!roles.includes(req.user.role)) {
+            return res.status(403).json({
+                message: `Accès refusé. Rôles requis: ${roles.join(', ')}.`
+            });
+        }
+        
+        next();
     };
+};
+
+// Account status check middleware
+const checkAccountStatus = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({
+            message: 'Authentification requise.'
+        });
+    }
+    
+    if (!req.user.actif) {
+        return res.status(403).json({
+            message: 'Compte désactivé. Contactez l\'administrateur.'
+        });
+    }
     
     next();
+};
+
+// Email verification middleware
+const requireEmailVerification = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({
+            message: 'Authentification requise.'
+        });
+    }
+    
+    if (!req.user.emailVerifie) {
+        return res.status(403).json({
+            message: 'Vérification d\'email requise.'
+        });
+    }
+    
+    next();
+};
+
+// Phone verification middleware
+const requirePhoneVerification = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({
+            message: 'Authentification requise.'
+        });
+    }
+    
+    if (!req.user.telephoneVerifie) {
+        return res.status(403).json({
+            message: 'Vérification de téléphone requise.'
+        });
+    }
+    
+    next();
+};
+
+// CORS preflight handler
+const handleCORS = (req, res, next) => {
+    if (req.method === 'OPTIONS') {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-auth-token');
+        return res.sendStatus(200);
+    }
+    next();
+};
+
+// Request validation middleware
+const validateRequest = (schema) => {
+    return (req, res, next) => {
+        const { error } = schema.validate(req.body);
+        
+        if (error) {
+            return res.status(400).json({
+                message: 'Données invalides',
+                errors: error.details.map(detail => detail.message)
+            });
+        }
+        
+        next();
+    };
+};
+
+// IP whitelist middleware
+const requireWhitelistedIP = (allowedIPs = []) => {
+    return (req, res, next) => {
+        const clientIP = req.ip;
+        
+        if (!allowedIPs.includes(clientIP)) {
+            return res.status(403).json({
+                message: 'Accès refusé depuis cette adresse IP.'
+            });
+        }
+        
+        next();
+    };
+};
+
+// Time-based access control
+const requireTimeWindow = (startHour = 8, endHour = 20) => {
+    return (req, res, next) => {
+        const currentHour = new Date().getHours();
+        
+        if (currentHour < startHour || currentHour > endHour) {
+            return res.status(403).json({
+                message: `Accès autorisé uniquement entre ${startHour}h et ${endHour}h.`
+            });
+        }
+        
+        next();
+    };
 };
 
 module.exports = {
     auth,
+    adminAuth,
     optionalAuth,
-    requireAdmin,
-    requireOwnershipOrAdmin,
-    rateLimitAuth,
-    logFailedAuth,
-    updateLastActivity,
-    extractClientInfo
+    rateLimiter,
+    trackActivity,
+    requireRole,
+    checkAccountStatus,
+    requireEmailVerification,
+    requirePhoneVerification,
+    handleCORS,
+    validateRequest,
+    requireWhitelistedIP,
+    requireTimeWindow
 };

@@ -533,8 +533,8 @@ const SettingsSchema = new mongoose.Schema({
     toObject: { virtuals: true }
 });
 
-// Ensure only one settings document
-SettingsSchema.index({ _id: 1 }, { unique: true });
+// ❌ REMOVED: SettingsSchema.index({ _id: 1 }, { unique: true }); 
+// This line was causing the warning because _id is automatically indexed by MongoDB
 
 // Virtual for complete contact info
 SettingsSchema.virtual('contactComplet').get(function() {
@@ -630,6 +630,17 @@ SettingsSchema.statics.getCurrent = async function() {
     }
     
     return settings;
+};
+
+// Static method to ensure singleton (alternative to problematic index)
+SettingsSchema.statics.ensureSingleton = async function() {
+    const count = await this.countDocuments();
+    if (count > 1) {
+        // Keep only the most recent one
+        const latest = await this.findOne().sort({ updatedAt: -1 });
+        await this.deleteMany({ _id: { $ne: latest._id } });
+        console.log(`Cleaned up ${count - 1} duplicate settings documents`);
+    }
 };
 
 // Pre-save middleware

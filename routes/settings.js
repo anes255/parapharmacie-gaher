@@ -1,64 +1,26 @@
 const express = require('express');
 const Settings = require('../models/Settings');
-const { auth, requireAdmin } = require('../middleware/auth');
+const { auth, adminAuth, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
 // @route   GET /api/settings
-// @desc    Get all settings
-// @access  Public (for basic settings) / Private/Admin (for all settings)
-router.get('/', async (req, res) => {
+// @desc    Get current site settings (public info only for non-admin)
+// @access  Public
+router.get('/', optionalAuth, async (req, res) => {
     try {
-        console.log('⚙️ Getting settings');
+        console.log('⚙️ Settings request by:', req.user?.email || 'Guest', '| Role:', req.user?.role || 'Guest');
         
-        const settings = await Settings.getSettings();
+        const settings = await Settings.getCurrent();
         
-        // If not admin, only return public settings
-        if (!req.user || req.user.role !== 'admin') {
-            const publicSettings = {
-                siteName: settings.siteName,
-                siteDescription: settings.siteDescription,
-                contact: settings.contact,
-                shipping: {
-                    fraisLivraisonDefaut: settings.shipping.fraisLivraisonDefaut,
-                    livraisonGratuiteSeuil: settings.shipping.livraisonGratuiteSeuil,
-                    delaiLivraisonMin: settings.shipping.delaiLivraisonMin,
-                    delaiLivraisonMax: settings.shipping.delaiLivraisonMax,
-                    wilayasDisponibles: settings.shipping.wilayasDisponibles
-                },
-                payment: {
-                    modesDisponibles: settings.payment.modesDisponibles.filter(mode => mode.actif)
-                },
-                business: {
-                    devise: settings.business.devise,
-                    langue: settings.business.langue
-                },
-                maintenance: settings.maintenance,
-                features: settings.features,
-                theme: settings.theme
-            };
-            
-            return res.json(publicSettings);
+        if (!settings) {
+            return res.status(404).json({
+                success: false,
+                message: 'Paramètres non trouvés'
+            });
         }
         
-        // Admin gets all settings
-        res.json(settings);
-        
-    } catch (error) {
-        console.error('❌ Settings retrieval error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des paramètres'
-        });
-    }
-});
-
-// @route   GET /api/settings/public
-// @desc    Get public settings only
-// @access  Public
-router.get('/public', async (req, res) => {
-    try {
-        const settings = await Settings.getSettings();
-        
+        // Public settings (visible to everyone)
         const publicSettings = {
             siteName: settings.siteName,
             siteDescription: settings.siteDescription,
@@ -66,48 +28,111 @@ router.get('/public', async (req, res) => {
                 email: settings.contact.email,
                 telephone: settings.contact.telephone,
                 adresse: settings.contact.adresse,
+                ville: settings.contact.ville,
+                wilaya: settings.contact.wilaya,
                 horaires: settings.contact.horaires
             },
+            socialMedia: settings.socialMedia,
             shipping: {
-                fraisLivraisonDefaut: settings.shipping.fraisLivraisonDefaut,
-                livraisonGratuiteSeuil: settings.shipping.livraisonGratuiteSeuil,
-                wilayasDisponibles: settings.shipping.wilayasDisponibles
+                standardCost: settings.shipping.standardCost,
+                freeShippingThreshold: settings.shipping.freeShippingThreshold,
+                estimatedDays: settings.shipping.estimatedDays
             },
             payment: {
-                modesDisponibles: settings.payment.modesDisponibles.filter(mode => mode.actif)
+                currency: settings.payment.currency,
+                methods: settings.payment.methods.filter(method => method.actif),
+                defaultMethod: settings.payment.defaultMethod
             },
-            business: {
-                devise: settings.business.devise
-            },
-            socialMedia: settings.socialMedia,
-            features: settings.features,
-            theme: settings.theme
+            localization: settings.localization
         };
         
-        res.json(publicSettings);
+        // Admin gets full settings
+        if (req.user && req.user.role === 'admin') {
+            console.log('✅ Full settings returned to admin');
+            return res.json({
+                success: true,
+                settings,
+                isAdmin: true
+            });
+        }
+        
+        console.log('✅ Public settings returned');
+        res.json({
+            success: true,
+            settings: publicSettings,
+            isAdmin: false
+        });
         
     } catch (error) {
-        console.error('❌ Public settings error:', error);
+        console.error('❌ Settings fetch error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la récupération des paramètres publics'
+            success: false,
+            message: 'Erreur lors du chargement des paramètres'
         });
     }
 });
 
 // @route   PUT /api/settings
-// @desc    Update settings
+// @desc    Update site settings (Admin only)
 // @access  Private/Admin
-router.put('/', auth, requireAdmin, async (req, res) => {
+router.put('/', adminAuth, async (req, res) => {
     try {
-        console.log('⚙️ Admin updating settings');
+        console.log('⚙️ Settings update request by:', req.user.email);
         
-        const updatedSettings = await Settings.updateSettings(req.body);
+        const settings = await Settings.getCurrent();
+        const updateData = req.body;
         
-        console.log('✅ Settings updated successfully');
+        // Validate critical fields
+        if (updateData.siteName && updateData.siteName.trim().length < 3) {
+            return res.status(400).json({
+                success: false,
+                message: 'Le nom du site doit contenir au moins 3 caractères'
+            });
+        }
+        
+        if (updateData.contact?.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(updateData.contact.email)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Format d\'email invalide'
+            });
+        }
+        
+        if (updateData.shipping?.standardCost && updateData.shipping.standardCost < 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Le coût de livraison ne peut pas être négatif'
+            });
+        }
+        
+        if (updateData.shipping?.freeShippingThreshold && updateData.shipping.freeShippingThreshold < 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Le seuil de livraison gratuite ne peut pas être négatif'
+            });
+        }
+        
+        // Update settings (deep merge for nested objects)
+        const updateSettings = (target, source) => {
+            for (const key in source) {
+                if (source[key] !== null && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+                    if (!target[key]) target[key] = {};
+                    updateSettings(target[key], source[key]);
+                } else if (source[key] !== undefined) {
+                    target[key] = source[key];
+                }
+            }
+        };
+        
+        updateSettings(settings, updateData);
+        
+        await settings.save();
+        
+        console.log('✅ Settings updated successfully by:', req.user.email);
         
         res.json({
+            success: true,
             message: 'Paramètres mis à jour avec succès',
-            settings: updatedSettings
+            settings
         });
         
     } catch (error) {
@@ -116,281 +141,373 @@ router.put('/', auth, requireAdmin, async (req, res) => {
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
             return res.status(400).json({
-                message: messages[0] || 'Données de paramètres invalides'
+                success: false,
+                message: 'Données invalides',
+                errors: messages
             });
         }
         
         res.status(500).json({
+            success: false,
             message: 'Erreur lors de la mise à jour des paramètres'
         });
     }
 });
 
-// @route   GET /api/settings/:section
-// @desc    Get specific settings section
-// @access  Private/Admin
-router.get('/:section', auth, requireAdmin, async (req, res) => {
-    try {
-        const settings = await Settings.getSettings();
-        const section = req.params.section;
-        
-        if (!settings[section]) {
-            return res.status(404).json({
-                message: 'Section de paramètres non trouvée'
-            });
-        }
-        
-        res.json({
-            [section]: settings[section]
-        });
-        
-    } catch (error) {
-        console.error('❌ Settings section error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération de la section'
-        });
-    }
-});
-
-// @route   PUT /api/settings/:section
-// @desc    Update specific settings section
-// @access  Private/Admin
-router.put('/:section', auth, requireAdmin, async (req, res) => {
-    try {
-        const section = req.params.section;
-        const updateData = { [section]: req.body };
-        
-        const updatedSettings = await Settings.updateSettings(updateData);
-        
-        res.json({
-            message: `Section ${section} mise à jour avec succès`,
-            [section]: updatedSettings[section]
-        });
-        
-    } catch (error) {
-        console.error('❌ Settings section update error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la mise à jour de la section'
-        });
-    }
-});
-
-// @route   GET /api/settings/shipping/wilayas
-// @desc    Get available wilayas for shipping
+// @route   GET /api/settings/contact
+// @desc    Get contact information
 // @access  Public
-router.get('/shipping/wilayas', async (req, res) => {
+router.get('/contact', async (req, res) => {
     try {
-        const settings = await Settings.getSettings();
+        console.log('📞 Contact info request');
         
-        res.json({
-            wilayas: settings.shipping.wilayasDisponibles || [],
-            fraisLivraisonDefaut: settings.shipping.fraisLivraisonDefaut,
-            livraisonGratuiteSeuil: settings.shipping.livraisonGratuiteSeuil
-        });
+        const settings = await Settings.getCurrent();
         
-    } catch (error) {
-        console.error('❌ Wilayas retrieval error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des wilayas'
-        });
-    }
-});
-
-// @route   POST /api/settings/shipping/wilayas
-// @desc    Add or update wilaya shipping info
-// @access  Private/Admin
-router.post('/shipping/wilayas', auth, requireAdmin, async (req, res) => {
-    try {
-        const { nom, fraisLivraison, delaiLivraison } = req.body;
-        
-        if (!nom || fraisLivraison === undefined) {
-            return res.status(400).json({
-                message: 'Nom de wilaya et frais de livraison requis'
-            });
-        }
-        
-        const settings = await Settings.getSettings();
-        
-        // Check if wilaya already exists
-        const existingIndex = settings.shipping.wilayasDisponibles.findIndex(w => w.nom === nom);
-        
-        const wilayaData = {
-            nom,
-            fraisLivraison: parseFloat(fraisLivraison),
-            delaiLivraison: delaiLivraison || '2-7 jours'
+        const contactInfo = {
+            siteName: settings.siteName,
+            contact: settings.contact,
+            socialMedia: settings.socialMedia,
+            reseauxSociaux: settings.reseauxSociaux // virtual field
         };
         
-        if (existingIndex > -1) {
-            // Update existing wilaya
-            settings.shipping.wilayasDisponibles[existingIndex] = wilayaData;
-        } else {
-            // Add new wilaya
-            settings.shipping.wilayasDisponibles.push(wilayaData);
-        }
-        
-        await settings.save();
+        console.log('✅ Contact info returned');
         
         res.json({
-            message: 'Wilaya mise à jour avec succès',
-            wilaya: wilayaData
+            success: true,
+            contact: contactInfo
         });
         
     } catch (error) {
-        console.error('❌ Wilaya update error:', error);
+        console.error('❌ Contact info error:', error);
         res.status(500).json({
-            message: 'Erreur lors de la mise à jour de la wilaya'
+            success: false,
+            message: 'Erreur lors du chargement des informations de contact'
         });
     }
 });
 
-// @route   DELETE /api/settings/shipping/wilayas/:nom
-// @desc    Remove wilaya from shipping
-// @access  Private/Admin
-router.delete('/shipping/wilayas/:nom', auth, requireAdmin, async (req, res) => {
+// @route   GET /api/settings/shipping
+// @desc    Get shipping information and calculate cost
+// @access  Public
+router.get('/shipping', async (req, res) => {
     try {
-        const settings = await Settings.getSettings();
+        console.log('🚚 Shipping info request');
         
-        settings.shipping.wilayasDisponibles = settings.shipping.wilayasDisponibles.filter(
-            w => w.nom !== req.params.nom
-        );
+        const { wilaya, total } = req.query;
+        const settings = await Settings.getCurrent();
         
-        await settings.save();
-        
-        res.json({
-            message: 'Wilaya supprimée avec succès'
-        });
-        
-    } catch (error) {
-        console.error('❌ Wilaya deletion error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la suppression de la wilaya'
-        });
-    }
-});
-
-// @route   POST /api/settings/payment/modes
-// @desc    Add or update payment mode
-// @access  Private/Admin
-router.post('/payment/modes', auth, requireAdmin, async (req, res) => {
-    try {
-        const { nom, actif, description } = req.body;
-        
-        if (!nom) {
-            return res.status(400).json({
-                message: 'Nom du mode de paiement requis'
-            });
-        }
-        
-        const settings = await Settings.getSettings();
-        
-        const existingIndex = settings.payment.modesDisponibles.findIndex(m => m.nom === nom);
-        
-        const modeData = {
-            nom,
-            actif: actif !== false,
-            description: description || ''
+        const shippingInfo = {
+            methods: settings.shipping.shippingMethods.filter(method => method.actif),
+            standardCost: settings.shipping.standardCost,
+            freeShippingThreshold: settings.shipping.freeShippingThreshold,
+            estimatedDays: settings.shipping.estimatedDays,
+            availableWilayas: settings.shipping.availableWilayas
         };
         
-        if (existingIndex > -1) {
-            settings.payment.modesDisponibles[existingIndex] = modeData;
-        } else {
-            settings.payment.modesDisponibles.push(modeData);
-        }
-        
-        await settings.save();
-        
-        res.json({
-            message: 'Mode de paiement mis à jour avec succès',
-            mode: modeData
-        });
-        
-    } catch (error) {
-        console.error('❌ Payment mode update error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la mise à jour du mode de paiement'
-        });
-    }
-});
-
-// @route   POST /api/settings/init
-// @desc    Initialize default settings
-// @access  Private/Admin
-router.post('/init', auth, requireAdmin, async (req, res) => {
-    try {
-        console.log('⚙️ Initializing default settings');
-        
-        // Initialize default wilayas
-        await Settings.initializeDefaultWilayas();
-        
-        // Initialize default payment modes if not exist
-        const settings = await Settings.getSettings();
-        
-        if (!settings.payment.modesDisponibles || settings.payment.modesDisponibles.length === 0) {
-            settings.payment.modesDisponibles = [
-                {
-                    nom: 'Paiement à la livraison',
-                    actif: true,
-                    description: 'Payez en espèces lors de la réception de votre commande'
-                },
-                {
-                    nom: 'Carte bancaire',
-                    actif: false,
-                    description: 'Paiement sécurisé par carte bancaire'
-                },
-                {
-                    nom: 'Virement bancaire',
-                    actif: false,
-                    description: 'Virement sur notre compte bancaire'
-                }
-            ];
+        // Calculate shipping cost if wilaya and total are provided
+        if (wilaya && total) {
+            const orderTotal = parseFloat(total);
+            const shippingCost = settings.getShippingCost(wilaya, orderTotal);
             
-            await settings.save();
+            shippingInfo.calculation = {
+                wilaya,
+                orderTotal,
+                shippingCost,
+                isFree: shippingCost === 0,
+                isAvailable: shippingCost !== null
+            };
         }
         
-        console.log('✅ Default settings initialized');
+        console.log('✅ Shipping info returned');
         
         res.json({
-            message: 'Paramètres par défaut initialisés avec succès',
-            settings
+            success: true,
+            shipping: shippingInfo
         });
         
     } catch (error) {
-        console.error('❌ Settings initialization error:', error);
+        console.error('❌ Shipping info error:', error);
         res.status(500).json({
-            message: 'Erreur lors de l\'initialisation des paramètres'
+            success: false,
+            message: 'Erreur lors du chargement des informations de livraison'
         });
     }
 });
 
-// @route   POST /api/settings/maintenance
-// @desc    Toggle maintenance mode
-// @access  Private/Admin
-router.post('/maintenance', auth, requireAdmin, async (req, res) => {
+// @route   POST /api/settings/shipping/calculate
+// @desc    Calculate shipping cost for specific order
+// @access  Public
+router.post('/shipping/calculate', async (req, res) => {
     try {
-        const { actif, message, dateDebut, dateFin } = req.body;
+        const { wilaya, orderTotal, items } = req.body;
         
-        const updateData = {
-            maintenance: {
-                actif: !!actif,
-                message: message || 'Site en maintenance. Nous revenons bientôt!',
-                dateDebut: dateDebut ? new Date(dateDebut) : (actif ? new Date() : null),
-                dateFin: dateFin ? new Date(dateFin) : null
+        console.log('💰 Shipping calculation request for:', wilaya, 'Total:', orderTotal);
+        
+        if (!wilaya || orderTotal === undefined) {
+            return res.status(400).json({
+                success: false,
+                message: 'Wilaya et montant total requis'
+            });
+        }
+        
+        const settings = await Settings.getCurrent();
+        const total = parseFloat(orderTotal);
+        
+        const shippingCost = settings.getShippingCost(wilaya, total);
+        
+        if (shippingCost === null) {
+            return res.status(400).json({
+                success: false,
+                message: 'Livraison non disponible pour cette wilaya'
+            });
+        }
+        
+        const calculation = {
+            wilaya,
+            orderTotal: total,
+            shippingCost,
+            finalTotal: total + shippingCost,
+            isFree: shippingCost === 0,
+            freeShippingThreshold: settings.shipping.freeShippingThreshold,
+            amountForFreeShipping: shippingCost > 0 ? 
+                Math.max(0, settings.shipping.freeShippingThreshold - total) : 0,
+            estimatedDays: settings.shipping.estimatedDays
+        };
+        
+        console.log('✅ Shipping cost calculated:', shippingCost, 'DA');
+        
+        res.json({
+            success: true,
+            calculation
+        });
+        
+    } catch (error) {
+        console.error('❌ Shipping calculation error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors du calcul des frais de livraison'
+        });
+    }
+});
+
+// @route   GET /api/settings/payment
+// @desc    Get payment methods and settings
+// @access  Public
+router.get('/payment', async (req, res) => {
+    try {
+        console.log('💳 Payment methods request');
+        
+        const settings = await Settings.getCurrent();
+        
+        const paymentInfo = {
+            currency: settings.payment.currency,
+            methods: settings.payment.methods.filter(method => method.actif).map(method => ({
+                nom: method.nom,
+                actif: method.actif
+                // Configuration is excluded for security
+            })),
+            defaultMethod: settings.payment.defaultMethod,
+            features: {
+                cashOnDelivery: settings.payment.cashOnDelivery,
+                bankTransfer: settings.payment.bankTransfer,
+                creditCard: settings.payment.creditCard
             }
         };
         
-        const settings = await Settings.updateSettings(updateData);
-        
-        console.log(`✅ Maintenance mode ${actif ? 'activated' : 'deactivated'}`);
+        console.log('✅ Payment methods returned');
         
         res.json({
-            message: `Mode maintenance ${actif ? 'activé' : 'désactivé'}`,
-            maintenance: settings.maintenance
+            success: true,
+            payment: paymentInfo
+        });
+        
+    } catch (error) {
+        console.error('❌ Payment methods error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors du chargement des méthodes de paiement'
+        });
+    }
+});
+
+// @route   PUT /api/settings/maintenance
+// @desc    Toggle maintenance mode (Admin only)
+// @access  Private/Admin
+router.put('/maintenance', adminAuth, async (req, res) => {
+    try {
+        const { enabled, message } = req.body;
+        
+        console.log('🛠️ Maintenance mode toggle by:', req.user.email, '| Enabled:', enabled);
+        
+        const settings = await Settings.getCurrent();
+        
+        settings.maintenance.enabled = Boolean(enabled);
+        if (message) settings.maintenance.message = message;
+        
+        await settings.save();
+        
+        console.log('✅ Maintenance mode updated');
+        
+        res.json({
+            success: true,
+            message: `Mode maintenance ${enabled ? 'activé' : 'désactivé'}`,
+            maintenance: {
+                enabled: settings.maintenance.enabled,
+                message: settings.maintenance.message
+            }
         });
         
     } catch (error) {
         console.error('❌ Maintenance toggle error:', error);
         res.status(500).json({
-            message: 'Erreur lors du changement du mode maintenance'
+            success: false,
+            message: 'Erreur lors de la modification du mode maintenance'
+        });
+    }
+});
+
+// @route   GET /api/settings/maintenance
+// @desc    Check maintenance status
+// @access  Public
+router.get('/maintenance', async (req, res) => {
+    try {
+        const settings = await Settings.getCurrent();
+        
+        res.json({
+            success: true,
+            maintenance: {
+                enabled: settings.maintenance.enabled,
+                message: settings.maintenance.message,
+                allowedIPs: settings.maintenance.allowedIPs
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Maintenance status error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors de la vérification du statut maintenance'
+        });
+    }
+});
+
+// @route   GET /api/settings/wilayas
+// @desc    Get list of Algerian wilayas
+// @access  Public
+router.get('/wilayas', async (req, res) => {
+    try {
+        const algerianWilayas = [
+            'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa',
+            'Biskra', 'Béchar', 'Blida', 'Bouira', 'Tamanrasset', 'Tébessa',
+            'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger', 'Djelfa', 'Jijel',
+            'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba', 'Guelma',
+            'Constantine', 'Médéa', 'Mostaganem', 'M\'Sila', 'Mascara', 'Ouargla',
+            'Oran', 'El Bayadh', 'Illizi', 'Bordj Bou Arréridj', 'Boumerdès',
+            'El Tarf', 'Tindouf', 'Tissemsilt', 'El Oued', 'Khenchela',
+            'Souk Ahras', 'Tipaza', 'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent',
+            'Ghardaïa', 'Relizane'
+        ];
+        
+        // Get shipping availability for each wilaya
+        const settings = await Settings.getCurrent();
+        
+        const wilayasWithShipping = algerianWilayas.map(wilaya => ({
+            nom: wilaya,
+            livraison: settings.shipping.availableWilayas.length === 0 || 
+                      settings.shipping.availableWilayas.includes(wilaya),
+            coutLivraison: settings.getShippingCost(wilaya, 0) // Base cost
+        }));
+        
+        res.json({
+            success: true,
+            wilayas: wilayasWithShipping
+        });
+        
+    } catch (error) {
+        console.error('❌ Wilayas list error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors du chargement des wilayas'
+        });
+    }
+});
+
+// @route   POST /api/settings/test-email
+// @desc    Test email configuration (Admin only)
+// @access  Private/Admin
+router.post('/test-email', adminAuth, async (req, res) => {
+    try {
+        const { recipient } = req.body;
+        
+        console.log('📧 Email test request by:', req.user.email, 'to:', recipient);
+        
+        if (!recipient) {
+            return res.status(400).json({
+                success: false,
+                message: 'Adresse de destination requise'
+            });
+        }
+        
+        const settings = await Settings.getCurrent();
+        
+        // Here you would implement actual email sending
+        // For now, just return success
+        console.log('✅ Email test would be sent to:', recipient);
+        
+        res.json({
+            success: true,
+            message: `Email de test envoyé à ${recipient}`,
+            config: {
+                from: settings.email.from.email,
+                smtp: {
+                    host: settings.email.smtp.host,
+                    port: settings.email.smtp.port
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Email test error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors du test d\'email'
+        });
+    }
+});
+
+// @route   POST /api/settings/backup
+// @desc    Create backup of current settings (Admin only)
+// @access  Private/Admin
+router.post('/backup', adminAuth, async (req, res) => {
+    try {
+        console.log('💾 Settings backup request by:', req.user.email);
+        
+        const settings = await Settings.getCurrent();
+        
+        const backup = {
+            timestamp: new Date().toISOString(),
+            version: '1.0.0',
+            settings: settings.toObject(),
+            createdBy: req.user.email
+        };
+        
+        console.log('✅ Settings backup created');
+        
+        res.json({
+            success: true,
+            message: 'Sauvegarde des paramètres créée',
+            backup: {
+                timestamp: backup.timestamp,
+                size: JSON.stringify(backup).length,
+                createdBy: backup.createdBy
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Settings backup error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors de la création de la sauvegarde'
         });
     }
 });

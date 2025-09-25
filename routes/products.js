@@ -1,22 +1,19 @@
-// FIXED routes/products.js - Enhanced with better error handling
-
 const express = require('express');
 const Product = require('../models/Product');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET all products with filters and pagination - FIXED
+// Obtenir tous les produits avec filtres et pagination
 router.get('/', async (req, res) => {
     try {
-        console.log('📦 Getting products with query:', req.query);
-        
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 12;
         const skip = (page - 1) * limit;
         
         let query = { actif: true };
         
-        // Filters
+        // Filtres
         if (req.query.categorie) {
             query.categorie = req.query.categorie;
         }
@@ -43,7 +40,7 @@ router.get('/', async (req, res) => {
             query.enVedette = true;
         }
         
-        // Sort
+        // Tri
         let sort = {};
         switch (req.query.sort) {
             case 'price_asc':
@@ -73,10 +70,7 @@ router.get('/', async (req, res) => {
         const total = await Product.countDocuments(query);
         const totalPages = Math.ceil(total / limit);
         
-        console.log(`✅ Found ${products.length} products out of ${total} total`);
-        
         res.json({
-            success: true,
             products,
             pagination: {
                 currentPage: page,
@@ -88,92 +82,191 @@ router.get('/', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Error getting products:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur lors de la récupération des produits',
-            error: error.message 
-        });
+        console.error('Erreur récupération produits:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
     }
 });
 
-// GET product by ID - FIXED  
+// Obtenir un produit par ID
 router.get('/:id', async (req, res) => {
     try {
-        console.log('📦 Getting product by ID:', req.params.id);
-        
         const product = await Product.findById(req.params.id);
         
         if (!product) {
-            console.log('❌ Product not found:', req.params.id);
-            return res.status(404).json({ 
-                success: false,
-                message: 'Produit non trouvé' 
-            });
+            return res.status(404).json({ message: 'Produit non trouvé' });
         }
         
-        console.log('✅ Product found:', product.nom);
+        res.json(product);
         
-        res.json({
-            success: true,
+    } catch (error) {
+        console.error('Erreur récupération produit:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// Créer un nouveau produit (Admin seulement)
+router.post('/', auth, async (req, res) => {
+    try {
+        // Vérifier si l'utilisateur est admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+
+        console.log('📦 Creating new product:', req.body.nom);
+        
+        const productData = {
+            ...req.body,
+            dateAjout: new Date()
+        };
+        
+        const product = new Product(productData);
+        await product.save();
+        
+        console.log('✅ Product created successfully:', product._id);
+        
+        res.status(201).json({
+            message: 'Produit créé avec succès',
             product
         });
         
     } catch (error) {
-        console.error('❌ Error getting product:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur lors de la récupération du produit',
-            error: error.message 
+        console.error('❌ Product creation error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données de produit invalides'
+            });
+        }
+        
+        res.status(500).json({
+            message: 'Erreur serveur lors de la création du produit',
+            error: error.message
         });
     }
 });
 
-// GET categories - ENHANCED
-router.get('/categories/all', async (req, res) => {
+// Mettre à jour un produit (Admin seulement)
+router.put('/:id', auth, async (req, res) => {
     try {
-        console.log('📦 Getting all categories');
+        // Vérifier si l'utilisateur est admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+
+        console.log('📦 Updating product:', req.params.id);
         
-        const categories = await Product.distinct('categorie');
+        const product = await Product.findById(req.params.id);
         
-        const categoriesInfo = [
-            { nom: 'Vitalité', description: 'Vitamines & Énergie', icon: 'fa-seedling' },
-            { nom: 'Cheveux', description: 'Soins capillaires', icon: 'fa-cut' },
-            { nom: 'Visage', description: 'Soins du visage', icon: 'fa-smile' },
-            { nom: 'Intime', description: 'Hygiène intime', icon: 'fa-heart' },
-            { nom: 'Solaire', description: 'Protection solaire', icon: 'fa-sun' },
-            { nom: 'Bébé', description: 'Soins pour bébés', icon: 'fa-baby-carriage' },
-            { nom: 'Maman', description: 'Soins pour mamans', icon: 'fa-female' },
-            { nom: 'Minceur', description: 'Produits minceur', icon: 'fa-weight' },
-            { nom: 'Homme', description: 'Soins pour hommes', icon: 'fa-user-tie' },
-            { nom: 'Soins', description: 'Soins généraux', icon: 'fa-spa' },
-            { nom: 'Dentaire', description: 'Hygiène dentaire', icon: 'fa-tooth' },
-            { nom: 'Sport', description: 'Nutrition sportive', icon: 'fa-dumbbell' }
-        ];
+        if (!product) {
+            return res.status(404).json({
+                message: 'Produit non trouvé'
+            });
+        }
         
-        console.log(`✅ Found categories:`, categories);
+        // Update product with new data
+        Object.keys(req.body).forEach(key => {
+            if (req.body[key] !== undefined) {
+                product[key] = req.body[key];
+            }
+        });
+        
+        await product.save();
+        
+        console.log('✅ Product updated successfully:', product._id);
         
         res.json({
-            success: true,
-            categories: categoriesInfo,
-            availableCategories: categories
+            message: 'Produit mis à jour avec succès',
+            product
         });
         
     } catch (error) {
-        console.error('❌ Error getting categories:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur lors de la récupération des catégories',
-            error: error.message 
+        console.error('❌ Product update error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données de produit invalides'
+            });
+        }
+        
+        res.status(500).json({
+            message: 'Erreur lors de la mise à jour du produit',
+            error: error.message
         });
     }
 });
 
-// GET featured products - FIXED
+// Supprimer un produit (Admin seulement)
+router.delete('/:id', auth, async (req, res) => {
+    try {
+        // Vérifier si l'utilisateur est admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+
+        console.log('📦 Deleting product:', req.params.id);
+        
+        const product = await Product.findById(req.params.id);
+        
+        if (!product) {
+            return res.status(404).json({
+                message: 'Produit non trouvé'
+            });
+        }
+        
+        await Product.findByIdAndDelete(req.params.id);
+        
+        console.log('✅ Product deleted successfully:', req.params.id);
+        
+        res.json({
+            message: 'Produit supprimé avec succès'
+        });
+        
+    } catch (error) {
+        console.error('❌ Product deletion error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la suppression du produit',
+            error: error.message
+        });
+    }
+});
+
+// Obtenir les catégories
+router.get('/categories/all', async (req, res) => {
+    try {
+        const categories = await Product.distinct('categorie');
+        
+        const categoriesInfo = [
+            { nom: 'Vitalité', description: 'Vitamines et suppléments alimentaires' },
+            { nom: 'Cheveux', description: 'Soins capillaires' },
+            { nom: 'Visage', description: 'Soins du visage' },
+            { nom: 'Intime', description: 'Hygiène intime' },
+            { nom: 'Solaire', description: 'Protection solaire' },
+            { nom: 'Bébé', description: 'Soins pour bébés' },
+            { nom: 'Homme', description: 'Soins pour hommes' },
+            { nom: 'Soins', description: 'Soins généraux' },
+            { nom: 'Dentaire', description: 'Hygiène dentaire' },
+            { nom: 'Sport', description: 'Nutrition sportive' }
+        ];
+        
+        res.json(categoriesInfo);
+        
+    } catch (error) {
+        console.error('Erreur récupération catégories:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+});
+
+// Obtenir les produits en vedette
 router.get('/featured/all', async (req, res) => {
     try {
-        console.log('📦 Getting featured products');
-        
         const products = await Product.find({ 
             enVedette: true, 
             actif: true 
@@ -181,28 +274,17 @@ router.get('/featured/all', async (req, res) => {
         .limit(8)
         .sort({ dateAjout: -1 });
         
-        console.log(`✅ Found ${products.length} featured products`);
-        
-        res.json({
-            success: true,
-            products
-        });
+        res.json(products);
         
     } catch (error) {
-        console.error('❌ Error getting featured products:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur lors de la récupération des produits en vedette',
-            error: error.message 
-        });
+        console.error('Erreur produits vedette:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
     }
 });
 
-// GET promotion products - FIXED
+// Obtenir les produits en promotion
 router.get('/promotions/all', async (req, res) => {
     try {
-        console.log('📦 Getting promotion products');
-        
         const products = await Product.find({ 
             enPromotion: true, 
             actif: true 
@@ -210,20 +292,11 @@ router.get('/promotions/all', async (req, res) => {
         .limit(8)
         .sort({ dateAjout: -1 });
         
-        console.log(`✅ Found ${products.length} promotion products`);
-        
-        res.json({
-            success: true,
-            products
-        });
+        res.json(products);
         
     } catch (error) {
-        console.error('❌ Error getting promotion products:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Erreur serveur lors de la récupération des produits en promotion',
-            error: error.message 
-        });
+        console.error('Erreur produits promotion:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
     }
 });
 

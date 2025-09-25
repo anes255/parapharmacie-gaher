@@ -5,16 +5,31 @@ const ProductSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Le nom du produit est requis'],
         trim: true,
-        minlength: [2, 'Le nom doit contenir au moins 2 caractères'],
-        maxlength: [200, 'Le nom ne peut pas dépasser 200 caractères'],
-        index: true
+        maxlength: [200, 'Le nom ne peut pas dépasser 200 caractères']
     },
     description: {
         type: String,
         required: [true, 'La description est requise'],
         trim: true,
-        minlength: [10, 'La description doit contenir au moins 10 caractères'],
         maxlength: [2000, 'La description ne peut pas dépasser 2000 caractères']
+    },
+    marque: {
+        type: String,
+        trim: true,
+        maxlength: [100, 'La marque ne peut pas dépasser 100 caractères'],
+        default: ''
+    },
+    categorie: {
+        type: String,
+        required: [true, 'La catégorie est requise'],
+        enum: {
+            values: [
+                'Vitalité', 'Sport', 'Visage', 'Cheveux', 'Solaire', 
+                'Intime', 'Soins', 'Bébé', 'Homme', 'Dentaire',
+                'Maman', 'Minceur'
+            ],
+            message: '{VALUE} n\'est pas une catégorie valide'
+        }
     },
     prix: {
         type: Number,
@@ -24,204 +39,72 @@ const ProductSchema = new mongoose.Schema({
             validator: function(v) {
                 return v > 0;
             },
-            message: 'Le prix doit être supérieur à zéro'
+            message: 'Le prix doit être supérieur à 0'
         }
     },
     prixOriginal: {
         type: Number,
-        default: null,
         min: [0, 'Le prix original ne peut pas être négatif'],
         validate: {
             validator: function(v) {
-                if (v !== null && v !== undefined) {
-                    return v >= this.prix;
-                }
-                return true;
+                return !v || v >= this.prix;
             },
-            message: 'Le prix original doit être supérieur ou égal au prix actuel'
+            message: 'Le prix original doit être supérieur ou égal au prix de vente'
         }
     },
-    categorie: {
-        type: String,
-        required: [true, 'La catégorie est requise'],
-        enum: {
-            values: [
-                'Vitalité',
-                'Sport', 
-                'Visage',
-                'Cheveux',
-                'Solaire',
-                'Intime',
-                'Soins',
-                'Bébé',
-                'Homme',
-                'Dentaire'
-            ],
-            message: 'Catégorie invalide'
-        },
-        index: true
+    pourcentagePromotion: {
+        type: Number,
+        min: [0, 'Le pourcentage de promotion ne peut pas être négatif'],
+        max: [100, 'Le pourcentage de promotion ne peut pas dépasser 100%'],
+        default: 0
     },
-    sousCategorie: {
-        type: String,
-        default: '',
-        trim: true,
-        maxlength: [100, 'La sous-catégorie ne peut pas dépasser 100 caractères']
-    },
-    image: {
-        type: String,
-        default: '',
-        trim: true
-    },
-    images: [{
-        url: {
-            type: String,
-            trim: true
-        },
-        alt: {
-            type: String,
-            default: '',
-            trim: true
-        },
-        principal: {
-            type: Boolean,
-            default: false
-        }
-    }],
     stock: {
         type: Number,
         required: [true, 'Le stock est requis'],
         min: [0, 'Le stock ne peut pas être négatif'],
         default: 0
     },
-    stockMinimum: {
+    stockMin: {
         type: Number,
-        default: 5,
-        min: [0, 'Le stock minimum ne peut pas être négatif']
+        min: [0, 'Le stock minimum ne peut pas être négatif'],
+        default: 5
     },
-    enPromotion: {
-        type: Boolean,
-        default: false,
-        index: true
-    },
-    pourcentagePromotion: {
-        type: Number,
-        min: [0, 'Le pourcentage de promotion ne peut pas être négatif'],
-        max: [100, 'Le pourcentage de promotion ne peut pas dépasser 100%'],
-        default: 0,
-        validate: {
-            validator: function(v) {
-                if (this.enPromotion && (!v || v === 0)) {
-                    return false;
-                }
-                return true;
-            },
-            message: 'Le pourcentage de promotion est requis si le produit est en promotion'
-        }
-    },
-    marque: {
+    unite: {
         type: String,
-        default: '',
-        trim: true,
-        maxlength: [100, 'La marque ne peut pas dépasser 100 caractères'],
-        index: true
+        enum: ['pièce', 'ml', 'g', 'kg', 'l', 'boîte', 'tube', 'flacon'],
+        default: 'pièce'
     },
-    reference: {
+    image: {
         type: String,
-        default: '',
-        trim: true,
-        unique: true,
-        sparse: true,
-        maxlength: [50, 'La référence ne peut pas dépasser 50 caractères']
+        default: ''
     },
-    codeBarres: {
-        type: String,
-        default: '',
-        trim: true,
-        unique: true,
-        sparse: true,
-        maxlength: [20, 'Le code-barres ne peut pas dépasser 20 caractères']
-    },
+    images: [{
+        type: String
+    }],
     ingredients: {
         type: String,
-        default: '',
         trim: true,
-        maxlength: [1000, 'Les ingrédients ne peuvent pas dépasser 1000 caractères']
+        maxlength: [1000, 'Les ingrédients ne peuvent pas dépasser 1000 caractères'],
+        default: ''
     },
     modeEmploi: {
         type: String,
-        default: '',
         trim: true,
-        maxlength: [1000, 'Le mode d\'emploi ne peut pas dépasser 1000 caractères']
+        maxlength: [1000, 'Le mode d\'emploi ne peut pas dépasser 1000 caractères'],
+        default: ''
     },
     precautions: {
         type: String,
-        default: '',
         trim: true,
-        maxlength: [1000, 'Les précautions ne peuvent pas dépasser 1000 caractères']
+        maxlength: [1000, 'Les précautions ne peuvent pas dépasser 1000 caractères'],
+        default: ''
     },
-    contenance: {
-        valeur: {
-            type: Number,
-            default: null,
-            min: [0, 'La contenance ne peut pas être négative']
-        },
-        unite: {
-            type: String,
-            enum: ['ml', 'g', 'l', 'kg', 'comprimés', 'gélules', 'doses', 'sachets', 'tubes', 'flacons'],
-            default: null
-        }
-    },
-    informationsNutritionnelles: [{
-        nom: {
-            type: String,
-            required: true,
-            trim: true
-        },
-        valeur: {
-            type: String,
-            required: true,
-            trim: true
-        },
-        unite: {
-            type: String,
-            default: '',
-            trim: true
-        }
-    }],
-    enVedette: {
-        type: Boolean,
-        default: false,
-        index: true
-    },
-    actif: {
-        type: Boolean,
-        default: true,
-        index: true
-    },
-    dateAjout: {
-        type: Date,
-        default: Date.now,
-        index: true
-    },
-    dateModification: {
-        type: Date,
-        default: Date.now
-    },
-    ajoutePar: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        default: null
-    },
-    modifiePar: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        default: null
-    },
-    tags: [{
+    conseils: {
         type: String,
         trim: true,
-        lowercase: true
-    }],
+        maxlength: [1000, 'Les conseils ne peuvent pas dépasser 1000 caractères'],
+        default: ''
+    },
     proprietes: [{
         nom: {
             type: String,
@@ -234,132 +117,190 @@ const ProductSchema = new mongoose.Schema({
             trim: true
         }
     }],
-    certifications: [{
+    tags: [{
         type: String,
-        enum: ['bio', 'halal', 'vegan', 'sans-gluten', 'sans-lactose', 'cruelty-free', 'naturel']
-    }],
-    ageMinimum: {
-        type: Number,
-        default: null,
-        min: [0, 'L\'âge minimum ne peut pas être négatif']
-    },
-    conditionsStockage: {
-        type: String,
-        default: '',
         trim: true,
-        maxlength: [200, 'Les conditions de stockage ne peuvent pas dépasser 200 caractères']
+        lowercase: true
+    }],
+    actif: {
+        type: Boolean,
+        default: true
     },
-    dureeValidite: {
-        valeur: {
+    enVedette: {
+        type: Boolean,
+        default: false
+    },
+    enPromotion: {
+        type: Boolean,
+        default: false
+    },
+    nouveau: {
+        type: Boolean,
+        default: true
+    },
+    populaire: {
+        type: Boolean,
+        default: false
+    },
+    note: {
+        moyenne: {
             type: Number,
-            default: null,
-            min: [1, 'La durée de validité doit être supérieure à 0']
+            min: 0,
+            max: 5,
+            default: 0
         },
-        unite: {
-            type: String,
-            enum: ['jours', 'mois', 'années'],
-            default: null
+        nombreAvis: {
+            type: Number,
+            min: 0,
+            default: 0
         }
+    },
+    ventes: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
+    vues: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
+    poids: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
+    dimensions: {
+        longueur: {
+            type: Number,
+            min: 0,
+            default: 0
+        },
+        largeur: {
+            type: Number,
+            min: 0,
+            default: 0
+        },
+        hauteur: {
+            type: Number,
+            min: 0,
+            default: 0
+        }
+    },
+    codeBarres: {
+        type: String,
+        trim: true,
+        unique: true,
+        sparse: true
+    },
+    reference: {
+        type: String,
+        trim: true,
+        unique: true,
+        sparse: true
     },
     fournisseur: {
         nom: {
             type: String,
-            default: '',
-            trim: true
+            trim: true,
+            default: ''
         },
         contact: {
             type: String,
-            default: '',
+            trim: true,
+            default: ''
+        }
+    },
+    dateExpiration: {
+        type: Date
+    },
+    datePeremption: {
+        type: Date
+    },
+    conditionsStockage: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    avertissements: [{
+        type: String,
+        trim: true
+    }],
+    certifications: [{
+        nom: {
+            type: String,
+            required: true,
             trim: true
         },
-        email: {
+        organisme: {
             type: String,
-            default: '',
-            trim: true,
-            lowercase: true
+            trim: true
+        },
+        dateObtention: {
+            type: Date
+        },
+        valide: {
+            type: Boolean,
+            default: true
         }
-    },
-    dimensionsEmballage: {
-        longueur: {
-            type: Number,
-            default: null,
-            min: [0, 'La longueur ne peut pas être négative']
-        },
-        largeur: {
-            type: Number,
-            default: null,
-            min: [0, 'La largeur ne peut pas être négative']
-        },
-        hauteur: {
-            type: Number,
-            default: null,
-            min: [0, 'La hauteur ne peut pas être négative']
-        },
-        poids: {
-            type: Number,
-            default: null,
-            min: [0, 'Le poids ne peut pas être négatif']
-        }
-    },
-    statistiques: {
-        vues: {
-            type: Number,
-            default: 0,
-            min: [0, 'Le nombre de vues ne peut pas être négatif']
-        },
-        ventesTotales: {
-            type: Number,
-            default: 0,
-            min: [0, 'Le nombre de ventes ne peut pas être négatif']
-        },
-        notemoyenne: {
-            type: Number,
-            default: 0,
-            min: [0, 'La note moyenne ne peut pas être négative'],
-            max: [5, 'La note moyenne ne peut pas dépasser 5']
-        },
-        nombreAvis: {
-            type: Number,
-            default: 0,
-            min: [0, 'Le nombre d\'avis ne peut pas être négatif']
-        }
-    },
+    }],
     seo: {
-        titre: {
+        metaTitle: {
             type: String,
-            default: '',
             trim: true,
-            maxlength: [60, 'Le titre SEO ne peut pas dépasser 60 caractères']
+            maxlength: [60, 'Le meta title ne peut pas dépasser 60 caractères']
         },
-        description: {
+        metaDescription: {
             type: String,
-            default: '',
             trim: true,
-            maxlength: [160, 'La description SEO ne peut pas dépasser 160 caractères']
+            maxlength: [160, 'La meta description ne peut pas dépasser 160 caractères']
         },
-        motsCles: [{
+        slug: {
             type: String,
             trim: true,
-            lowercase: true
-        }]
+            lowercase: true,
+            unique: true,
+            sparse: true
+        }
+    },
+    dateAjout: {
+        type: Date,
+        default: Date.now
+    },
+    dateModification: {
+        type: Date,
+        default: Date.now
+    },
+    ajoutePar: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    modifiePar: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
 });
 
-// Index pour les recherches fréquentes
-ProductSchema.index({ nom: 'text', description: 'text', marque: 'text', tags: 'text' });
-ProductSchema.index({ categorie: 1, actif: 1 });
-ProductSchema.index({ enVedette: 1, actif: 1 });
-ProductSchema.index({ enPromotion: 1, actif: 1 });
+// Index pour améliorer les performances
+ProductSchema.index({ nom: 'text', description: 'text', marque: 'text' });
+ProductSchema.index({ categorie: 1 });
 ProductSchema.index({ prix: 1 });
+ProductSchema.index({ actif: 1 });
+ProductSchema.index({ enVedette: 1 });
+ProductSchema.index({ enPromotion: 1 });
 ProductSchema.index({ stock: 1 });
-ProductSchema.index({ marque: 1, actif: 1 });
 ProductSchema.index({ dateAjout: -1 });
+ProductSchema.index({ 'note.moyenne': -1 });
+ProductSchema.index({ ventes: -1 });
 
-// Index composé pour les recherches avancées
+// Index composé pour les recherches communes
 ProductSchema.index({ actif: 1, categorie: 1, prix: 1 });
-ProductSchema.index({ actif: 1, enVedette: 1, dateAjout: -1 });
+ProductSchema.index({ actif: 1, enVedette: 1 });
+ProductSchema.index({ actif: 1, enPromotion: 1 });
 
 // Virtual pour vérifier si le produit est en rupture de stock
 ProductSchema.virtual('enRuptureStock').get(function() {
@@ -368,317 +309,190 @@ ProductSchema.virtual('enRuptureStock').get(function() {
 
 // Virtual pour vérifier si le stock est faible
 ProductSchema.virtual('stockFaible').get(function() {
-    return this.stock > 0 && this.stock <= this.stockMinimum;
+    return this.stock > 0 && this.stock <= this.stockMin;
 });
 
-// Virtual pour calculer le pourcentage d'économie
-ProductSchema.virtual('economie').get(function() {
+// Virtual pour calculer le pourcentage de promotion automatiquement
+ProductSchema.virtual('pourcentagePromotionCalcule').get(function() {
     if (this.prixOriginal && this.prixOriginal > this.prix) {
-        return Math.round(((this.prixOriginal - this.prix) / this.prixOriginal) * 100);
+        return Math.round((this.prixOriginal - this.prix) / this.prixOriginal * 100);
     }
     return 0;
 });
 
-// Virtual pour générer l'URL de l'image principale
-ProductSchema.virtual('imagePrincipale').get(function() {
+// Virtual pour l'URL de l'image principale
+ProductSchema.virtual('imageUrl').get(function() {
     if (this.image) {
-        return this.image;
+        return this.image.startsWith('http') ? this.image : `/images/products/${this.image}`;
     }
-    
-    const imagePrincipale = this.images.find(img => img.principal);
-    if (imagePrincipale) {
-        return imagePrincipale.url;
-    }
-    
-    if (this.images.length > 0) {
-        return this.images[0].url;
-    }
-    
-    return '/images/placeholder.jpg';
+    return '/images/products/default.jpg';
 });
 
-// Virtual pour le statut du stock
-ProductSchema.virtual('statutStock').get(function() {
-    if (this.stock === 0) {
-        return 'rupture';
-    } else if (this.stock <= this.stockMinimum) {
-        return 'faible';
-    } else if (this.stock <= this.stockMinimum * 2) {
-        return 'moyen';
-    }
-    return 'bon';
-});
-
-// Virtual pour générer le slug du produit
-ProductSchema.virtual('slug').get(function() {
+// Virtual pour le slug automatique
+ProductSchema.virtual('slugAuto').get(function() {
     return this.nom
         .toLowerCase()
-        .replace(/[àáâãäå]/g, 'a')
-        .replace(/[èéêë]/g, 'e')
-        .replace(/[ìíîï]/g, 'i')
-        .replace(/[òóôõö]/g, 'o')
-        .replace(/[ùúûü]/g, 'u')
-        .replace(/[ç]/g, 'c')
-        .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\s+/g, '-')
-        .trim('-');
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
 });
 
-// Pre-save middleware
+// Middleware pour calculer automatiquement certains champs
 ProductSchema.pre('save', function(next) {
     // Mettre à jour la date de modification
     this.dateModification = new Date();
     
-    // Calculer automatiquement le pourcentage de promotion
-    if (this.enPromotion && this.prixOriginal && this.prixOriginal > this.prix) {
-        this.pourcentagePromotion = Math.round(((this.prixOriginal - this.prix) / this.prixOriginal) * 100);
-    } else if (!this.enPromotion) {
-        this.pourcentagePromotion = 0;
+    // Calculer le pourcentage de promotion si pas défini
+    if (this.enPromotion && this.prixOriginal && !this.pourcentagePromotion) {
+        this.pourcentagePromotion = this.pourcentagePromotionCalcule;
     }
     
-    // Générer une référence automatique si elle n'existe pas
-    if (!this.reference) {
-        const categoriePrefixe = this.categorie.substring(0, 3).toUpperCase();
-        const timestamp = Date.now().toString().slice(-6);
-        this.reference = `${categoriePrefixe}-${timestamp}`;
+    // Générer le slug si pas défini
+    if (!this.seo.slug) {
+        this.seo.slug = this.slugAuto;
     }
     
-    // Générer des tags automatiques basés sur le nom et la catégorie
-    if (this.tags.length === 0) {
-        const autoTags = [
-            this.categorie.toLowerCase(),
-            ...this.nom.toLowerCase().split(' ').filter(word => word.length > 2)
-        ];
-        
-        if (this.marque) {
-            autoTags.push(this.marque.toLowerCase());
-        }
-        
-        this.tags = [...new Set(autoTags)]; // Supprimer les doublons
+    // Générer les meta tags SEO si pas définis
+    if (!this.seo.metaTitle) {
+        this.seo.metaTitle = this.nom.substring(0, 60);
     }
     
-    // Générer automatiquement le contenu SEO si vide
-    if (!this.seo.titre) {
-        this.seo.titre = this.nom.length > 60 ? this.nom.substring(0, 57) + '...' : this.nom;
+    if (!this.seo.metaDescription) {
+        this.seo.metaDescription = this.description.substring(0, 160);
     }
     
-    if (!this.seo.description) {
-        const descCourte = this.description.replace(/(<([^>]+)>)/gi, "").substring(0, 157);
-        this.seo.description = descCourte + (this.description.length > 157 ? '...' : '');
-    }
-    
-    if (this.seo.motsCles.length === 0) {
-        this.seo.motsCles = this.tags.slice(0, 5); // Prendre les 5 premiers tags
-    }
+    // Marquer comme plus nouveau si récemment ajouté (moins de 30 jours)
+    const maintenant = new Date();
+    const dateAjout = this.dateAjout || maintenant;
+    const diffJours = (maintenant - dateAjout) / (1000 * 60 * 60 * 24);
+    this.nouveau = diffJours <= 30;
     
     next();
 });
 
-// Méthodes d'instance
-ProductSchema.methods.ajouterVue = function() {
-    this.statistiques.vues += 1;
+// Méthode pour incrémenter les vues
+ProductSchema.methods.incrementerVues = function() {
+    this.vues += 1;
     return this.save();
 };
 
-ProductSchema.methods.mettreAJourStock = function(nouvelleQuantite, operation = 'set') {
-    switch(operation) {
-        case 'add':
-            this.stock += nouvelleQuantite;
-            break;
-        case 'subtract':
-            this.stock = Math.max(0, this.stock - nouvelleQuantite);
-            break;
-        case 'set':
-        default:
-            this.stock = Math.max(0, nouvelleQuantite);
-            break;
-    }
-    
-    return this.save();
-};
-
-ProductSchema.methods.ajouterVente = function(quantite = 1) {
-    this.statistiques.ventesTotales += quantite;
+// Méthode pour incrémenter les ventes
+ProductSchema.methods.incrementerVentes = function(quantite = 1) {
+    this.ventes += quantite;
     this.stock = Math.max(0, this.stock - quantite);
     return this.save();
 };
 
+// Méthode pour mettre à jour la note
 ProductSchema.methods.mettreAJourNote = function(nouvelleNote) {
-    const ancienTotal = this.statistiques.notemoyenne * this.statistiques.nombreAvis;
-    this.statistiques.nombreAvis += 1;
-    this.statistiques.notemoyenne = (ancienTotal + nouvelleNote) / this.statistiques.nombreAvis;
-    this.statistiques.notemoyenne = Math.round(this.statistiques.notemoyenne * 100) / 100; // 2 décimales
+    const nombreTotal = this.note.nombreAvis + 1;
+    const sommeTotal = (this.note.moyenne * this.note.nombreAvis) + nouvelleNote;
+    
+    this.note.moyenne = Math.round((sommeTotal / nombreTotal) * 10) / 10;
+    this.note.nombreAvis = nombreTotal;
     
     return this.save();
 };
 
-ProductSchema.methods.toggleVedette = function() {
-    this.enVedette = !this.enVedette;
-    return this.save();
+// Méthode pour vérifier la disponibilité
+ProductSchema.methods.estDisponible = function(quantiteDemandee = 1) {
+    return this.actif && this.stock >= quantiteDemandee;
 };
 
-ProductSchema.methods.togglePromotion = function(prixOriginal = null) {
-    this.enPromotion = !this.enPromotion;
-    if (this.enPromotion && prixOriginal) {
-        this.prixOriginal = prixOriginal;
-    } else if (!this.enPromotion) {
-        this.prixOriginal = null;
-        this.pourcentagePromotion = 0;
-    }
-    return this.save();
-};
-
-ProductSchema.methods.dupliquer = function(nouveauNom) {
-    const produitDuplique = new this.constructor(this.toObject());
-    produitDuplique._id = new mongoose.Types.ObjectId();
-    produitDuplique.nom = nouveauNom || `${this.nom} - Copie`;
-    produitDuplique.reference = ''; // Sera généré automatiquement
-    produitDuplique.codeBarres = ''; // Doit être unique
-    produitDuplique.dateAjout = new Date();
-    produitDuplique.statistiques = {
-        vues: 0,
-        ventesTotales: 0,
-        notemoyenne: 0,
-        nombreAvis: 0
-    };
-    
-    return produitDuplique.save();
-};
-
-// Méthodes statiques
-ProductSchema.statics.rechercheAvancee = function(criteres, options = {}) {
-    const query = {};
+// Méthode statique pour rechercher des produits
+ProductSchema.statics.rechercher = function(criteres = {}) {
+    let query = this.find({ actif: true });
     
     // Recherche textuelle
     if (criteres.texte) {
-        query.$text = { $search: criteres.texte };
+        query = query.find({ $text: { $search: criteres.texte } });
     }
     
-    // Filtres
-    if (criteres.categorie && criteres.categorie !== 'all') {
-        query.categorie = criteres.categorie;
+    // Filtrage par catégorie
+    if (criteres.categorie) {
+        query = query.where('categorie').equals(criteres.categorie);
     }
     
-    if (criteres.marque && criteres.marque !== 'all') {
-        query.marque = criteres.marque;
+    // Filtrage par prix
+    if (criteres.prixMin) {
+        query = query.where('prix').gte(criteres.prixMin);
     }
     
-    if (criteres.prixMin || criteres.prixMax) {
-        query.prix = {};
-        if (criteres.prixMin) query.prix.$gte = criteres.prixMin;
-        if (criteres.prixMax) query.prix.$lte = criteres.prixMax;
+    if (criteres.prixMax) {
+        query = query.where('prix').lte(criteres.prixMax);
     }
     
-    if (criteres.enPromotion === true) {
-        query.enPromotion = true;
+    // Filtres booléens
+    if (criteres.enVedette) {
+        query = query.where('enVedette').equals(true);
     }
     
-    if (criteres.enVedette === true) {
-        query.enVedette = true;
+    if (criteres.enPromotion) {
+        query = query.where('enPromotion').equals(true);
     }
     
-    if (criteres.disponible === true) {
-        query.stock = { $gt: 0 };
+    if (criteres.nouveau) {
+        query = query.where('nouveau').equals(true);
     }
     
-    if (criteres.certifications && criteres.certifications.length > 0) {
-        query.certifications = { $in: criteres.certifications };
+    if (criteres.disponible) {
+        query = query.where('stock').gt(0);
     }
     
-    // Toujours filtrer les produits actifs sauf indication contraire
-    if (criteres.inclureInactifs !== true) {
-        query.actif = true;
+    // Tri
+    if (criteres.tri) {
+        const tris = {
+            'prix-asc': { prix: 1 },
+            'prix-desc': { prix: -1 },
+            'nom-asc': { nom: 1 },
+            'nom-desc': { nom: -1 },
+            'date-asc': { dateAjout: 1 },
+            'date-desc': { dateAjout: -1 },
+            'note': { 'note.moyenne': -1 },
+            'ventes': { ventes: -1 }
+        };
+        
+        query = query.sort(tris[criteres.tri] || { dateAjout: -1 });
     }
     
-    // Options de tri
-    let sort = { dateAjout: -1 }; // Par défaut: plus récent d'abord
-    
-    if (options.tri === 'prix-asc') {
-        sort = { prix: 1 };
-    } else if (options.tri === 'prix-desc') {
-        sort = { prix: -1 };
-    } else if (options.tri === 'nom-asc') {
-        sort = { nom: 1 };
-    } else if (options.tri === 'nom-desc') {
-        sort = { nom: -1 };
-    } else if (options.tri === 'popularite') {
-        sort = { 'statistiques.ventesTotales': -1 };
-    } else if (options.tri === 'note') {
-        sort = { 'statistiques.notemoyenne': -1 };
-    }
-    
-    const queryBuilder = this.find(query).sort(sort);
-    
-    // Pagination
-    if (options.page && options.limite) {
-        const skip = (options.page - 1) * options.limite;
-        queryBuilder.skip(skip).limit(options.limite);
-    }
-    
-    return queryBuilder;
+    return query;
 };
 
-ProductSchema.statics.getProduitsPopulaires = function(limite = 10) {
-    return this.find({ actif: true })
-               .sort({ 'statistiques.ventesTotales': -1, 'statistiques.vues': -1 })
-               .limit(limite);
-};
-
-ProductSchema.statics.getProduitsEnVedette = function(limite = 10) {
-    return this.find({ actif: true, enVedette: true })
-               .sort({ dateAjout: -1 })
-               .limit(limite);
-};
-
-ProductSchema.statics.getProduitsEnPromotion = function(limite = 10) {
-    return this.find({ actif: true, enPromotion: true })
-               .sort({ pourcentagePromotion: -1, dateAjout: -1 })
-               .limit(limite);
-};
-
-ProductSchema.statics.getProduitsStockFaible = function() {
+// Méthode statique pour obtenir les produits similaires
+ProductSchema.statics.obtenirSimilaires = function(productId, categorie, limite = 4) {
     return this.find({
+        _id: { $ne: productId },
+        categorie: categorie,
         actif: true,
-        $expr: { $lte: ['$stock', '$stockMinimum'] },
         stock: { $gt: 0 }
-    }).sort({ stock: 1 });
+    })
+    .sort({ ventes: -1, 'note.moyenne': -1 })
+    .limit(limite);
 };
 
-ProductSchema.statics.getProduitsRupture = function() {
-    return this.find({ actif: true, stock: 0 })
-               .sort({ dateModification: -1 });
-};
-
-ProductSchema.statics.getStatistiquesStock = function() {
-    return this.aggregate([
-        { $match: { actif: true } },
+// Méthode statique pour obtenir les statistiques
+ProductSchema.statics.obtenirStatistiques = async function() {
+    const pipeline = [
+        {
+            $match: { actif: true }
+        },
         {
             $group: {
                 _id: null,
                 totalProduits: { $sum: 1 },
+                produitsEnStock: { $sum: { $cond: [{ $gt: ['$stock', 0] }, 1, 0] } },
+                produitsEnVedette: { $sum: { $cond: ['$enVedette', 1, 0] } },
+                produitsEnPromotion: { $sum: { $cond: ['$enPromotion', 1, 0] } },
+                prixMoyen: { $avg: '$prix' },
                 stockTotal: { $sum: '$stock' },
-                produitsEnRupture: {
-                    $sum: { $cond: [{ $eq: ['$stock', 0] }, 1, 0] }
-                },
-                produitsStockFaible: {
-                    $sum: { $cond: [{ $and: [{ $gt: ['$stock', 0] }, { $lte: ['$stock', '$stockMinimum'] }] }, 1, 0] }
-                },
-                valeurStock: { $sum: { $multiply: ['$prix', '$stock'] } }
+                ventesTotales: { $sum: '$ventes' }
             }
         }
-    ]);
+    ];
+    
+    const result = await this.aggregate(pipeline);
+    return result[0] || {};
 };
-
-ProductSchema.statics.getMarques = function() {
-    return this.distinct('marque', { actif: true, marque: { $ne: '' } });
-};
-
-ProductSchema.statics.getCertifications = function() {
-    return this.distinct('certifications', { actif: true });
-};
-
-// Assurer que les virtuals sont inclus lors de la sérialisation
-ProductSchema.set('toJSON', { virtuals: true });
-ProductSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Product', ProductSchema);

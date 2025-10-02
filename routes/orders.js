@@ -1,6 +1,6 @@
 const express = require('express');
 const Order = require('../models/Order');
-const auth = require('../middleware/auth');
+const { auth } = require('../middleware/auth'); // FIXED: Destructure auth from the object
 
 const router = express.Router();
 

@@ -173,7 +173,7 @@ async function createAdminUser() {
                 prenom: 'Parapharmacie',
                 email: 'pharmaciegaher@gmail.com',
                 password: hashedPassword,
-                telephone: '+213123456789',
+                telephone: '0555123456', // FIXED: Valid Algerian format (10 digits starting with 0)
                 adresse: 'Tipaza, Algérie',
                 wilaya: 'Tipaza',
                 role: 'admin',
@@ -186,6 +186,14 @@ async function createAdminUser() {
             console.log('   🔑 Password: anesaya75');
         } else {
             console.log('✅ Admin user exists');
+            
+            // Fix admin phone if it's wrong
+            if (admin.telephone === '+213123456789') {
+                console.log('🔧 Fixing admin phone number...');
+                admin.telephone = '0555123456';
+                await admin.save({ validateBeforeSave: false }); // Skip validation during fix
+                console.log('✅ Admin phone fixed');
+            }
         }
     } catch (error) {
         console.error('⚠️ Admin user creation error:', error.message);
@@ -202,7 +210,7 @@ const PORT = process.env.PORT || 5000;
 connectDB();
 
 // Start server
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log('\n========================================');
     console.log('🚀 Shifa Parapharmacie Backend');
     console.log('========================================');
@@ -215,12 +223,16 @@ app.listen(PORT, '0.0.0.0', () => {
 // Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('Shutting down gracefully...');
-    mongoose.connection.close();
-    process.exit(0);
+    server.close(() => {
+        mongoose.connection.close();
+        process.exit(0);
+    });
 });
 
 process.on('SIGINT', () => {
     console.log('Shutting down gracefully...');
-    mongoose.connection.close();
-    process.exit(0);
+    server.close(() => {
+        mongoose.connection.close();
+        process.exit(0);
+    });
 });

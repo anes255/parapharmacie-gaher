@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const auth = require('../middleware/auth');
+const { auth } = require('../middleware/auth'); // FIXED: Destructure auth from the object
 
 const router = express.Router();
 
@@ -17,42 +17,20 @@ const generateToken = (id) => {
 // @access  Public
 router.post('/register', async (req, res) => {
     try {
-        console.log('📝 Registration attempt - Body received:', {
-            ...req.body,
-            password: req.body.password ? '***HIDDEN***' : undefined
-        });
-        
-        // Check if body exists
-        if (!req.body || Object.keys(req.body).length === 0) {
-            console.error('❌ Empty request body');
-            return res.status(400).json({
-                message: 'Aucune donnée reçue'
-            });
-        }
+        console.log('📝 Registration attempt:', req.body.email);
         
         const { nom, prenom, email, password, telephone, adresse, ville, wilaya, codePostal } = req.body;
         
-        // Validation - Check all required fields
-        const missingFields = [];
-        if (!nom) missingFields.push('nom');
-        if (!prenom) missingFields.push('prenom');
-        if (!email) missingFields.push('email');
-        if (!password) missingFields.push('password');
-        if (!telephone) missingFields.push('telephone');
-        if (!wilaya) missingFields.push('wilaya');
-        
-        if (missingFields.length > 0) {
-            console.error('❌ Missing fields:', missingFields);
+        // Validation
+        if (!nom || !prenom || !email || !password || !telephone || !wilaya) {
             return res.status(400).json({
-                message: 'Veuillez remplir tous les champs obligatoires',
-                missingFields
+                message: 'Veuillez remplir tous les champs obligatoires'
             });
         }
         
         // Check if user exists
         const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) {
-            console.log('❌ Email already exists:', email);
             return res.status(400).json({
                 message: 'Un utilisateur avec cet email existe déjà'
             });
@@ -61,7 +39,6 @@ router.post('/register', async (req, res) => {
         // Check if telephone exists
         const existingPhone = await User.findOne({ telephone: telephone.replace(/\s+/g, '') });
         if (existingPhone) {
-            console.log('❌ Phone already exists:', telephone);
             return res.status(400).json({
                 message: 'Ce numéro de téléphone est déjà utilisé'
             });
@@ -111,8 +88,10 @@ router.post('/register', async (req, res) => {
         // Generate token
         const token = generateToken(user._id);
         
-        // Update last connection
-        await user.updateLastConnection();
+        // Update last connection if method exists
+        if (user.updateLastConnection) {
+            await user.updateLastConnection();
+        }
         
         res.status(201).json({
             message: 'Inscription réussie',
@@ -150,8 +129,7 @@ router.post('/register', async (req, res) => {
         }
         
         res.status(500).json({
-            message: 'Erreur serveur lors de l\'inscription',
-            error: error.message
+            message: 'Erreur serveur lors de l\'inscription'
         });
     }
 });
@@ -161,73 +139,32 @@ router.post('/register', async (req, res) => {
 // @access  Public
 router.post('/login', async (req, res) => {
     try {
-        console.log('🔐 Login attempt - Headers:', req.headers['content-type']);
-        console.log('🔐 Login attempt - Body keys:', Object.keys(req.body));
-        console.log('🔐 Login attempt - Body:', {
-            email: req.body.email,
-            password: req.body.password ? '***HIDDEN***' : undefined
-        });
-        
-        // Check if body exists
-        if (!req.body || Object.keys(req.body).length === 0) {
-            console.error('❌ Empty request body');
-            return res.status(400).json({
-                message: 'Aucune donnée reçue. Vérifiez que Content-Type est application/json'
-            });
-        }
+        console.log('🔐 Login attempt:', req.body.email);
         
         const { email, password } = req.body;
         
-        // Validation - Check required fields exist
+        // Validation
         if (!email || !password) {
-            console.error('❌ Missing credentials:', { 
-                hasEmail: !!email, 
-                hasPassword: !!password 
-            });
             return res.status(400).json({
-                message: 'Email et mot de passe requis',
-                received: {
-                    email: !!email,
-                    password: !!password
-                }
+                message: 'Email et mot de passe requis'
             });
         }
-        
-        // Validate email is not empty string
-        if (email.trim() === '') {
-            return res.status(400).json({
-                message: 'Email ne peut pas être vide'
-            });
-        }
-        
-        // Validate password is not empty string
-        if (password.trim() === '') {
-            return res.status(400).json({
-                message: 'Mot de passe ne peut pas être vide'
-            });
-        }
-        
-        console.log('🔍 Looking for user:', email.toLowerCase());
         
         // Find user and include password for comparison
         const user = await User.findOne({ 
-            email: email.toLowerCase().trim(),
+            email: email.toLowerCase(),
             actif: true 
         }).select('+password');
         
         if (!user) {
-            console.log('❌ User not found:', email);
             return res.status(401).json({
                 message: 'Email ou mot de passe incorrect'
             });
         }
         
-        console.log('✅ User found:', user.email, 'Role:', user.role);
-        
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
-            console.log('❌ Password mismatch for:', email);
             return res.status(401).json({
                 message: 'Email ou mot de passe incorrect'
             });
@@ -238,8 +175,10 @@ router.post('/login', async (req, res) => {
         // Generate token
         const token = generateToken(user._id);
         
-        // Update last connection
-        await user.updateLastConnection();
+        // Update last connection if method exists
+        if (user.updateLastConnection) {
+            await user.updateLastConnection();
+        }
         
         res.json({
             message: 'Connexion réussie',
@@ -262,8 +201,7 @@ router.post('/login', async (req, res) => {
     } catch (error) {
         console.error('❌ Login error:', error);
         res.status(500).json({
-            message: 'Erreur serveur lors de la connexion',
-            error: error.message
+            message: 'Erreur serveur lors de la connexion'
         });
     }
 });

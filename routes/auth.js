@@ -1,120 +1,154 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { auth } = require('../middleware/auth');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 
-// Simple rate limiter middleware function
-const rateLimiter = (maxRequests = 5, windowMs = 15 * 60 * 1000) => {
-    const requests = new Map();
-    
-    return (req, res, next) => {
-        const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
-        const now = Date.now();
-        
-        if (!requests.has(clientIP)) {
-            requests.set(clientIP, []);
-        }
-        
-        const clientRequests = requests.get(clientIP);
-        const validRequests = clientRequests.filter(timestamp => now - timestamp < windowMs);
-        
-        if (validRequests.length >= maxRequests) {
-            return res.status(429).json({
-                message: 'Trop de tentatives. Veuillez réessayer plus tard.'
-            });
-        }
-        
-        validRequests.push(now);
-        requests.set(clientIP, validRequests);
-        next();
-    };
+// Generate JWT Token
+const generateToken = (id) => {
+    return jwt.sign({ id }, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024', {
+        expiresIn: '30d'
+    });
 };
 
 // @route   POST /api/auth/register
 // @desc    Register user
 // @access  Public
-router.post('/register', rateLimiter(5, 15 * 60 * 1000), async (req, res) => {
+router.post('/register', async (req, res) => {
     try {
-        console.log('📝 Registration attempt:', req.body.email);
+        console.log('📝 Registration attempt - Body received:', {
+            ...req.body,
+            password: req.body.password ? '***HIDDEN***' : undefined
+        });
         
-        const { prenom, nom, email, motDePasse, telephone } = req.body;
-        
-        // Validation
-        if (!prenom || !nom || !email || !motDePasse) {
+        // Check if body exists
+        if (!req.body || Object.keys(req.body).length === 0) {
+            console.error('❌ Empty request body');
             return res.status(400).json({
-                message: 'Tous les champs obligatoires doivent être remplis'
+                message: 'Aucune donnée reçue'
             });
         }
         
-        if (motDePasse.length < 6) {
+        const { nom, prenom, email, password, telephone, adresse, ville, wilaya, codePostal } = req.body;
+        
+        // Validation - Check all required fields
+        const missingFields = [];
+        if (!nom) missingFields.push('nom');
+        if (!prenom) missingFields.push('prenom');
+        if (!email) missingFields.push('email');
+        if (!password) missingFields.push('password');
+        if (!telephone) missingFields.push('telephone');
+        if (!wilaya) missingFields.push('wilaya');
+        
+        if (missingFields.length > 0) {
+            console.error('❌ Missing fields:', missingFields);
             return res.status(400).json({
-                message: 'Le mot de passe doit contenir au moins 6 caractères'
+                message: 'Veuillez remplir tous les champs obligatoires',
+                missingFields
             });
         }
         
-        // Check if user already exists
-        let user = await User.findOne({ email: email.toLowerCase() });
-        if (user) {
+        // Check if user exists
+        const existingUser = await User.findOne({ email: email.toLowerCase() });
+        if (existingUser) {
+            console.log('❌ Email already exists:', email);
             return res.status(400).json({
                 message: 'Un utilisateur avec cet email existe déjà'
             });
         }
         
-        // Hash password
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(motDePasse, salt);
+        // Check if telephone exists
+        const existingPhone = await User.findOne({ telephone: telephone.replace(/\s+/g, '') });
+        if (existingPhone) {
+            console.log('❌ Phone already exists:', telephone);
+            return res.status(400).json({
+                message: 'Ce numéro de téléphone est déjà utilisé'
+            });
+        }
+        
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({
+                message: 'Format d\'email invalide'
+            });
+        }
+        
+        // Validate password strength
+        if (password.length < 6) {
+            return res.status(400).json({
+                message: 'Le mot de passe doit contenir au moins 6 caractères'
+            });
+        }
+        
+        // Validate phone format (Algerian)
+        const phoneRegex = /^(\+213|0)[5-9]\d{8}$/;
+        if (!phoneRegex.test(telephone.replace(/\s+/g, ''))) {
+            return res.status(400).json({
+                message: 'Format de téléphone invalide (numéro algérien requis)'
+            });
+        }
         
         // Create user
-        user = new User({
-            prenom,
-            nom,
-            email: email.toLowerCase(),
-            motDePasse: hashedPassword,
-            telephone,
-            role: 'client',
-            actif: true,
-            dateInscription: new Date()
+        const user = new User({
+            nom: nom.trim(),
+            prenom: prenom.trim(),
+            email: email.toLowerCase().trim(),
+            password, // Will be hashed by pre-save hook
+            telephone: telephone.replace(/\s+/g, ''),
+            adresse: adresse ? adresse.trim() : '',
+            ville: ville ? ville.trim() : '',
+            wilaya,
+            codePostal: codePostal ? codePostal.trim() : '',
+            dateInscription: new Date(),
+            actif: true
         });
         
         await user.save();
         console.log('✅ User registered successfully:', user.email);
         
-        // Generate JWT token
-        const payload = {
-            userId: user._id,
-            email: user.email,
-            role: user.role
-        };
+        // Generate token
+        const token = generateToken(user._id);
         
-        const token = jwt.sign(
-            payload,
-            process.env.JWT_SECRET || 'fallback_secret_key',
-            { expiresIn: '7d' }
-        );
-        
-        // Return user data without password
-        const userData = {
-            _id: user._id,
-            prenom: user.prenom,
-            nom: user.nom,
-            email: user.email,
-            telephone: user.telephone,
-            role: user.role,
-            actif: user.actif,
-            dateInscription: user.dateInscription
-        };
+        // Update last connection
+        await user.updateLastConnection();
         
         res.status(201).json({
             message: 'Inscription réussie',
             token,
-            user: userData
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                role: user.role,
+                dateInscription: user.dateInscription
+            }
         });
         
     } catch (error) {
         console.error('❌ Registration error:', error);
+        
+        if (error.code === 11000) {
+            // Duplicate key error
+            const field = Object.keys(error.keyPattern)[0];
+            return res.status(400).json({
+                message: `${field === 'email' ? 'Email' : 'Téléphone'} déjà utilisé`
+            });
+        }
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données invalides'
+            });
+        }
+        
         res.status(500).json({
             message: 'Erreur serveur lors de l\'inscription',
             error: error.message
@@ -123,80 +157,106 @@ router.post('/register', rateLimiter(5, 15 * 60 * 1000), async (req, res) => {
 });
 
 // @route   POST /api/auth/login
-// @desc    Authenticate user & get token
+// @desc    Login user
 // @access  Public
-router.post('/login', rateLimiter(5, 15 * 60 * 1000), async (req, res) => {
+router.post('/login', async (req, res) => {
     try {
-        console.log('🔐 Login attempt for:', req.body.email);
+        console.log('🔐 Login attempt - Headers:', req.headers['content-type']);
+        console.log('🔐 Login attempt - Body keys:', Object.keys(req.body));
+        console.log('🔐 Login attempt - Body:', {
+            email: req.body.email,
+            password: req.body.password ? '***HIDDEN***' : undefined
+        });
         
-        const { email, motDePasse } = req.body;
-        
-        // Validation
-        if (!email || !motDePasse) {
+        // Check if body exists
+        if (!req.body || Object.keys(req.body).length === 0) {
+            console.error('❌ Empty request body');
             return res.status(400).json({
-                message: 'Email et mot de passe requis'
+                message: 'Aucune donnée reçue. Vérifiez que Content-Type est application/json'
             });
         }
         
-        // Check if user exists
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const { email, password } = req.body;
+        
+        // Validation - Check required fields exist
+        if (!email || !password) {
+            console.error('❌ Missing credentials:', { 
+                hasEmail: !!email, 
+                hasPassword: !!password 
+            });
+            return res.status(400).json({
+                message: 'Email et mot de passe requis',
+                received: {
+                    email: !!email,
+                    password: !!password
+                }
+            });
+        }
+        
+        // Validate email is not empty string
+        if (email.trim() === '') {
+            return res.status(400).json({
+                message: 'Email ne peut pas être vide'
+            });
+        }
+        
+        // Validate password is not empty string
+        if (password.trim() === '') {
+            return res.status(400).json({
+                message: 'Mot de passe ne peut pas être vide'
+            });
+        }
+        
+        console.log('🔍 Looking for user:', email.toLowerCase());
+        
+        // Find user and include password for comparison
+        const user = await User.findOne({ 
+            email: email.toLowerCase().trim(),
+            actif: true 
+        }).select('+password');
+        
         if (!user) {
-            return res.status(400).json({
-                message: 'Identifiants invalides'
+            console.log('❌ User not found:', email);
+            return res.status(401).json({
+                message: 'Email ou mot de passe incorrect'
             });
         }
         
-        // Check if user is active
-        if (!user.actif) {
-            return res.status(400).json({
-                message: 'Compte désactivé. Contactez l\'administrateur.'
-            });
-        }
+        console.log('✅ User found:', user.email, 'Role:', user.role);
         
-        // Validate password
-        const isMatch = await bcrypt.compare(motDePasse, user.motDePasse);
+        // Check password
+        const isMatch = await user.comparePassword(password);
         if (!isMatch) {
-            return res.status(400).json({
-                message: 'Identifiants invalides'
+            console.log('❌ Password mismatch for:', email);
+            return res.status(401).json({
+                message: 'Email ou mot de passe incorrect'
             });
         }
         
-        console.log('✅ Login successful for:', user.email);
+        console.log('✅ Login successful:', user.email, 'Role:', user.role);
         
-        // Update last login
-        user.derniereConnexion = new Date();
-        await user.save();
+        // Generate token
+        const token = generateToken(user._id);
         
-        // Generate JWT token
-        const payload = {
-            userId: user._id,
-            email: user.email,
-            role: user.role
-        };
-        
-        const token = jwt.sign(
-            payload,
-            process.env.JWT_SECRET || 'fallback_secret_key',
-            { expiresIn: '7d' }
-        );
-        
-        // Return user data without password
-        const userData = {
-            _id: user._id,
-            prenom: user.prenom,
-            nom: user.nom,
-            email: user.email,
-            telephone: user.telephone,
-            role: user.role,
-            actif: user.actif,
-            dateInscription: user.dateInscription,
-            derniereConnexion: user.derniereConnexion
-        };
+        // Update last connection
+        await user.updateLastConnection();
         
         res.json({
             message: 'Connexion réussie',
             token,
-            user: userData
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                role: user.role,
+                dateInscription: user.dateInscription,
+                dernierConnexion: user.dernierConnexion
+            }
         });
         
     } catch (error) {
@@ -208,25 +268,39 @@ router.post('/login', rateLimiter(5, 15 * 60 * 1000), async (req, res) => {
     }
 });
 
-// @route   GET /api/auth/me
-// @desc    Get current user
+// @route   GET /api/auth/profile
+// @desc    Get user profile
 // @access  Private
-router.get('/me', auth, async (req, res) => {
+router.get('/profile', auth, async (req, res) => {
     try {
-        const user = await User.findById(req.user.userId).select('-motDePasse');
-        if (!user) {
+        const user = await User.findById(req.user.id);
+        
+        if (!user || !user.actif) {
             return res.status(404).json({
                 message: 'Utilisateur non trouvé'
             });
         }
         
-        res.json(user);
+        res.json({
+            id: user._id,
+            nom: user.nom,
+            prenom: user.prenom,
+            email: user.email,
+            telephone: user.telephone,
+            adresse: user.adresse,
+            ville: user.ville,
+            wilaya: user.wilaya,
+            codePostal: user.codePostal,
+            role: user.role,
+            dateInscription: user.dateInscription,
+            dernierConnexion: user.dernierConnexion,
+            preferences: user.preferences
+        });
         
     } catch (error) {
-        console.error('❌ Get user error:', error);
+        console.error('❌ Profile error:', error);
         res.status(500).json({
-            message: 'Erreur serveur lors de la récupération du profil',
-            error: error.message
+            message: 'Erreur serveur'
         });
     }
 });
@@ -236,35 +310,68 @@ router.get('/me', auth, async (req, res) => {
 // @access  Private
 router.put('/profile', auth, async (req, res) => {
     try {
-        const { prenom, nom, telephone } = req.body;
+        const { nom, prenom, telephone, adresse, ville, wilaya, codePostal, preferences } = req.body;
         
-        const user = await User.findById(req.user.userId);
+        const user = await User.findById(req.user.id);
         if (!user) {
             return res.status(404).json({
                 message: 'Utilisateur non trouvé'
             });
         }
         
-        // Update fields
-        if (prenom) user.prenom = prenom;
-        if (nom) user.nom = nom;
-        if (telephone) user.telephone = telephone;
+        // Update fields if provided
+        if (nom) user.nom = nom.trim();
+        if (prenom) user.prenom = prenom.trim();
+        if (telephone) {
+            // Check if phone is already used by another user
+            const existingPhone = await User.findOne({ 
+                telephone: telephone.replace(/\s+/g, ''), 
+                _id: { $ne: req.user.id } 
+            });
+            if (existingPhone) {
+                return res.status(400).json({
+                    message: 'Ce numéro de téléphone est déjà utilisé'
+                });
+            }
+            user.telephone = telephone.replace(/\s+/g, '');
+        }
+        if (adresse) user.adresse = adresse.trim();
+        if (ville) user.ville = ville.trim();
+        if (wilaya) user.wilaya = wilaya;
+        if (codePostal) user.codePostal = codePostal.trim();
+        if (preferences) user.preferences = { ...user.preferences, ...preferences };
         
         await user.save();
         
-        // Return updated user without password
-        const userData = await User.findById(user._id).select('-motDePasse');
-        
         res.json({
             message: 'Profil mis à jour avec succès',
-            user: userData
+            user: {
+                id: user._id,
+                nom: user.nom,
+                prenom: user.prenom,
+                email: user.email,
+                telephone: user.telephone,
+                adresse: user.adresse,
+                ville: user.ville,
+                wilaya: user.wilaya,
+                codePostal: user.codePostal,
+                role: user.role,
+                preferences: user.preferences
+            }
         });
         
     } catch (error) {
-        console.error('❌ Update profile error:', error);
+        console.error('❌ Profile update error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                message: messages[0] || 'Données invalides'
+            });
+        }
+        
         res.status(500).json({
-            message: 'Erreur lors de la mise à jour du profil',
-            error: error.message
+            message: 'Erreur lors de la mise à jour du profil'
         });
     }
 });
@@ -274,39 +381,38 @@ router.put('/profile', auth, async (req, res) => {
 // @access  Private
 router.post('/change-password', auth, async (req, res) => {
     try {
-        const { motDePasseActuel, nouveauMotDePasse } = req.body;
+        const { currentPassword, newPassword } = req.body;
         
-        if (!motDePasseActuel || !nouveauMotDePasse) {
+        if (!currentPassword || !newPassword) {
             return res.status(400).json({
                 message: 'Mot de passe actuel et nouveau mot de passe requis'
             });
         }
         
-        if (nouveauMotDePasse.length < 6) {
+        if (newPassword.length < 6) {
             return res.status(400).json({
                 message: 'Le nouveau mot de passe doit contenir au moins 6 caractères'
             });
         }
         
-        const user = await User.findById(req.user.userId);
+        // Find user with password
+        const user = await User.findById(req.user.id).select('+password');
         if (!user) {
             return res.status(404).json({
                 message: 'Utilisateur non trouvé'
             });
         }
         
-        // Validate current password
-        const isMatch = await bcrypt.compare(motDePasseActuel, user.motDePasse);
+        // Check current password
+        const isMatch = await user.comparePassword(currentPassword);
         if (!isMatch) {
             return res.status(400).json({
                 message: 'Mot de passe actuel incorrect'
             });
         }
         
-        // Hash new password
-        const salt = await bcrypt.genSalt(10);
-        user.motDePasse = await bcrypt.hash(nouveauMotDePasse, salt);
-        
+        // Update password
+        user.password = newPassword; // Will be hashed by pre-save hook
         await user.save();
         
         res.json({
@@ -314,10 +420,53 @@ router.post('/change-password', auth, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Change password error:', error);
+        console.error('❌ Password change error:', error);
         res.status(500).json({
-            message: 'Erreur lors du changement de mot de passe',
-            error: error.message
+            message: 'Erreur lors du changement de mot de passe'
+        });
+    }
+});
+
+// @route   POST /api/auth/verify-token
+// @desc    Verify JWT token
+// @access  Public
+router.post('/verify-token', async (req, res) => {
+    try {
+        const { token } = req.body;
+        
+        if (!token) {
+            return res.status(400).json({
+                valid: false,
+                message: 'Token requis'
+            });
+        }
+        
+        // Verify token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+        
+        // Check if user exists
+        const user = await User.findById(decoded.id);
+        if (!user || !user.actif) {
+            return res.status(401).json({
+                valid: false,
+                message: 'Token invalide'
+            });
+        }
+        
+        res.json({
+            valid: true,
+            user: {
+                id: user._id,
+                email: user.email,
+                role: user.role
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Token verification error:', error);
+        res.status(401).json({
+            valid: false,
+            message: 'Token invalide ou expiré'
         });
     }
 });

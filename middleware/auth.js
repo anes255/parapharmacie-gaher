@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
-// Main authentication middleware
+// Main authentication middleware - FIXED
 const auth = async (req, res, next) => {
     try {
         // Get token from header
@@ -15,12 +15,17 @@ const auth = async (req, res, next) => {
         }
         
         // Verify token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_key');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
         
-        // Check if user still exists
-        const user = await User.findById(decoded.userId).select('-motDePasse');
+        console.log('🔍 Token decoded:', { id: decoded.id });
+        
+        // CRITICAL FIX: Use decoded.id instead of decoded.userId to match token generation
+        const user = await User.findById(decoded.id).select('-password');
+        
+        console.log('🔍 User lookup result:', user ? `Found: ${user.email}` : 'NOT FOUND');
         
         if (!user) {
+            console.error('❌ User not found for token ID:', decoded.id);
             return res.status(401).json({
                 message: 'Token invalide, utilisateur non trouvé'
             });
@@ -32,15 +37,18 @@ const auth = async (req, res, next) => {
             });
         }
         
-        // Add user info to request
+        // Add user info to request - using consistent field names
         req.user = {
-            userId: user._id,
+            id: user._id.toString(),
+            userId: user._id, // Keep both for backwards compatibility
             email: user.email,
             role: user.role,
             prenom: user.prenom,
-            nom: user.nom
+            nom: user.nom,
+            actif: user.actif
         };
         
+        console.log('✅ Auth successful for:', user.email, 'Role:', user.role);
         next();
         
     } catch (error) {
@@ -68,7 +76,7 @@ const auth = async (req, res, next) => {
 // Admin role check middleware
 const requireAdmin = (req, res, next) => {
     try {
-        console.log('🔐 Checking admin role for user:', req.user.email);
+        console.log('🔐 Checking admin role for user:', req.user?.email);
         
         if (!req.user) {
             return res.status(401).json({
@@ -77,6 +85,7 @@ const requireAdmin = (req, res, next) => {
         }
         
         if (req.user.role !== 'admin') {
+            console.log('❌ Access denied - user role:', req.user.role);
             return res.status(403).json({
                 message: 'Accès refusé - privilèges administrateur requis'
             });
@@ -104,16 +113,19 @@ const optionalAuth = async (req, res, next) => {
             return next();
         }
         
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_key');
-        const user = await User.findById(decoded.userId).select('-motDePasse');
+        // CRITICAL FIX: Use decoded.id instead of decoded.userId
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'shifa_parapharmacie_secret_key_2024');
+        const user = await User.findById(decoded.id).select('-password');
         
         if (user && user.actif) {
             req.user = {
+                id: user._id.toString(),
                 userId: user._id,
                 email: user.email,
                 role: user.role,
                 prenom: user.prenom,
-                nom: user.nom
+                nom: user.nom,
+                actif: user.actif
             };
         } else {
             req.user = null;
@@ -169,10 +181,11 @@ const requireOwnershipOrAdmin = (userIdField = 'userId') => {
                 return next();
             }
             
-            // Check ownership
+            // Check ownership - handle both id and userId for flexibility
             const resourceUserId = req.params[userIdField] || req.body[userIdField];
+            const currentUserId = req.user.id || req.user.userId?.toString();
             
-            if (!resourceUserId || resourceUserId !== req.user.userId.toString()) {
+            if (!resourceUserId || resourceUserId !== currentUserId) {
                 return res.status(403).json({
                     message: 'Accès refusé - vous ne pouvez accéder qu\'à vos propres ressources'
                 });

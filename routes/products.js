@@ -1,6 +1,6 @@
 const express = require('express');
 const Product = require('../models/Product');
-const auth = require('../middleware/auth');
+const { auth, requireAdmin } = require('../middleware/auth'); // FIXED: Destructure the import
 
 const router = express.Router();
 
@@ -109,17 +109,12 @@ router.get('/:id', async (req, res) => {
 });
 
 // ============================================================================
-// ADMIN ROUTES (Protected - require authentication)
+// ADMIN ROUTES (Protected - require authentication + admin role)
 // ============================================================================
 
 // CREATE - Ajouter un nouveau produit
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, requireAdmin, async (req, res) => {
     try {
-        // Verify admin role
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Accès refusé - Admin requis' });
-        }
-
         const productData = {
             nom: req.body.nom,
             description: req.body.description || '',
@@ -155,13 +150,8 @@ router.post('/', auth, async (req, res) => {
 });
 
 // UPDATE - Modifier un produit
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', auth, requireAdmin, async (req, res) => {
     try {
-        // Verify admin role
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Accès refusé - Admin requis' });
-        }
-
         const product = await Product.findById(req.params.id);
         
         if (!product) {
@@ -200,13 +190,8 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // DELETE - Supprimer un produit
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, requireAdmin, async (req, res) => {
     try {
-        // Verify admin role
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Accès refusé - Admin requis' });
-        }
-
         const product = await Product.findById(req.params.id);
         
         if (!product) {

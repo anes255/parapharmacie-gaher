@@ -1,6 +1,6 @@
 const express = require('express');
 const Order = require('../models/Order');
-const auth = require('../middleware/auth');
+const { auth } = require('../middleware/auth'); // FIXED: Destructure to get the auth function
 
 const router = express.Router();
 
@@ -9,12 +9,10 @@ const router = express.Router();
 // @access  Public
 router.post('/', async (req, res) => {
     try {
-        console.log('📦 New order creation request received');
-        console.log('📦 Request body:', JSON.stringify(req.body, null, 2));
+        console.log('📦 New order creation:', req.body);
         
         const {
             numeroCommande,
-            orderNumber, // FIXED: Accept both field names
             client,
             articles,
             sousTotal,
@@ -24,54 +22,22 @@ router.post('/', async (req, res) => {
             commentaires
         } = req.body;
         
-        // CRITICAL FIX: Use either numeroCommande or orderNumber
-        const finalOrderNumber = numeroCommande || orderNumber;
-        
-        console.log('📦 Final order number:', finalOrderNumber);
-        
         // Validation
-        if (!finalOrderNumber) {
+        if (!numeroCommande || !client || !articles || articles.length === 0) {
             return res.status(400).json({
-                message: 'Numéro de commande requis',
-                error: 'Missing numeroCommande or orderNumber'
-            });
-        }
-        
-        if (!client || !articles || articles.length === 0) {
-            return res.status(400).json({
-                message: 'Données de commande incomplètes',
-                error: 'Missing client or articles'
+                message: 'Données de commande incomplètes'
             });
         }
         
         if (!client.prenom || !client.nom || !client.email || !client.telephone || !client.adresse || !client.wilaya) {
             return res.status(400).json({
-                message: 'Informations client incomplètes',
-                error: 'Missing required client fields'
+                message: 'Informations client incomplètes'
             });
         }
         
-        // Check for duplicate order number
-        const existingOrder = await Order.findOne({
-            $or: [
-                { numeroCommande: finalOrderNumber },
-                { orderNumber: finalOrderNumber }
-            ]
-        });
-        
-        if (existingOrder) {
-            console.log('⚠️ Duplicate order number detected:', finalOrderNumber);
-            return res.status(409).json({
-                message: 'Ce numéro de commande existe déjà',
-                error: 'Duplicate order number',
-                existingOrder: existingOrder.numeroCommande
-            });
-        }
-        
-        // Create order with BOTH fields for backward compatibility
+        // Create order
         const order = new Order({
-            numeroCommande: finalOrderNumber,
-            orderNumber: finalOrderNumber, // FIXED: Set both fields
+            numeroCommande,
             client: {
                 userId: req.user ? req.user.id : null,
                 prenom: client.prenom.trim(),
@@ -79,12 +45,10 @@ router.post('/', async (req, res) => {
                 email: client.email.toLowerCase().trim(),
                 telephone: client.telephone.replace(/\s+/g, ''),
                 adresse: client.adresse.trim(),
-                wilaya: client.wilaya,
-                ville: client.ville || '',
-                codePostal: client.codePostal || ''
+                wilaya: client.wilaya
             },
             articles: articles.map(article => ({
-                productId: String(article.productId),
+                productId: article.productId,
                 nom: article.nom,
                 prix: parseFloat(article.prix),
                 quantite: parseInt(article.quantite),
@@ -99,7 +63,6 @@ router.post('/', async (req, res) => {
             dateCommande: new Date()
         });
         
-        console.log('📦 Saving order to database...');
         await order.save();
         console.log('✅ Order created successfully:', order.numeroCommande);
         
@@ -108,7 +71,6 @@ router.post('/', async (req, res) => {
             order: {
                 _id: order._id,
                 numeroCommande: order.numeroCommande,
-                orderNumber: order.orderNumber,
                 statut: order.statut,
                 total: order.total,
                 dateCommande: order.dateCommande
@@ -117,30 +79,16 @@ router.post('/', async (req, res) => {
         
     } catch (error) {
         console.error('❌ Order creation error:', error);
-        console.error('❌ Error name:', error.name);
-        console.error('❌ Error message:', error.message);
-        console.error('❌ Error code:', error.code);
-        
-        // Handle MongoDB duplicate key error
-        if (error.code === 11000) {
-            const field = Object.keys(error.keyPattern || {})[0];
-            return res.status(409).json({
-                message: 'Cette commande existe déjà',
-                error: `Duplicate key error on field: ${field}`
-            });
-        }
         
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(err => err.message);
             return res.status(400).json({
-                message: messages[0] || 'Données de commande invalides',
-                error: 'Validation error'
+                message: messages[0] || 'Données de commande invalides'
             });
         }
         
         res.status(500).json({
-            message: 'Erreur lors de la création de la commande',
-            error: error.message
+            message: 'Erreur serveur lors de la création de la commande'
         });
     }
 });
@@ -150,6 +98,7 @@ router.post('/', async (req, res) => {
 // @access  Private/Admin
 router.get('/stats/dashboard', auth, async (req, res) => {
     try {
+        // Check if user is admin
         if (req.user.role !== 'admin') {
             return res.status(403).json({
                 message: 'Accès administrateur requis'
@@ -159,12 +108,14 @@ router.get('/stats/dashboard', auth, async (req, res) => {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         
+        // Get various statistics
         const totalOrders = await Order.countDocuments();
         const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
         const monthlyOrders = await Order.countDocuments({ 
             dateCommande: { $gte: startOfMonth } 
         });
         
+        // Calculate monthly revenue
         const monthlyRevenue = await Order.aggregate([
             {
                 $match: {
@@ -180,6 +131,7 @@ router.get('/stats/dashboard', auth, async (req, res) => {
             }
         ]);
         
+        // Get orders by status
         const ordersByStatus = await Order.aggregate([
             {
                 $group: {
@@ -279,6 +231,7 @@ router.put('/:id', auth, async (req, res) => {
         
         // Check permissions
         if (req.user.role !== 'admin') {
+            // Users can only cancel their own orders and only if status is 'en-attente'
             if (order.client.userId !== req.user.id) {
                 return res.status(403).json({
                     message: 'Accès non autorisé à cette commande'
@@ -333,6 +286,7 @@ router.put('/:id', auth, async (req, res) => {
 // @access  Private/Admin
 router.get('/', auth, async (req, res) => {
     try {
+        // Check if user is admin
         if (req.user.role !== 'admin') {
             return res.status(403).json({
                 message: 'Accès administrateur requis'
@@ -347,10 +301,12 @@ router.get('/', auth, async (req, res) => {
         
         let query = {};
         
+        // Filter by status
         if (req.query.statut) {
             query.statut = req.query.statut;
         }
         
+        // Filter by date range
         if (req.query.dateFrom || req.query.dateTo) {
             query.dateCommande = {};
             if (req.query.dateFrom) {
@@ -393,6 +349,7 @@ router.get('/', auth, async (req, res) => {
 // @access  Private/Admin
 router.delete('/:id', auth, async (req, res) => {
     try {
+        // Check if user is admin
         if (req.user.role !== 'admin') {
             return res.status(403).json({
                 message: 'Accès administrateur requis'
@@ -419,69 +376,6 @@ router.delete('/:id', auth, async (req, res) => {
         console.error('❌ Delete order error:', error);
         res.status(500).json({
             message: 'Erreur lors de la suppression de la commande'
-        });
-    }
-});
-
-// @route   GET /api/orders/stats/dashboard
-// @desc    Get order statistics for admin dashboard
-// @access  Private/Admin
-router.get('/stats/dashboard', auth, async (req, res) => {
-    try {
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({
-                message: 'Accès administrateur requis'
-            });
-        }
-        
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        
-        const totalOrders = await Order.countDocuments();
-        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
-        const monthlyOrders = await Order.countDocuments({ 
-            dateCommande: { $gte: startOfMonth } 
-        });
-        
-        const monthlyRevenue = await Order.aggregate([
-            {
-                $match: {
-                    dateCommande: { $gte: startOfMonth },
-                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$total' }
-                }
-            }
-        ]);
-        
-        const ordersByStatus = await Order.aggregate([
-            {
-                $group: {
-                    _id: '$statut',
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-        
-        res.json({
-            totalOrders,
-            pendingOrders,
-            monthlyOrders,
-            monthlyRevenue: monthlyRevenue[0]?.total || 0,
-            ordersByStatus: ordersByStatus.reduce((acc, item) => {
-                acc[item._id] = item.count;
-                return acc;
-            }, {})
-        });
-        
-    } catch (error) {
-        console.error('❌ Get order stats error:', error);
-        res.status(500).json({
-            message: 'Erreur lors de la récupération des statistiques'
         });
     }
 });

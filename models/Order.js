@@ -7,13 +7,6 @@ const OrderSchema = new mongoose.Schema({
         unique: true,
         trim: true
     },
-    // CRITICAL FIX: Add orderNumber as alias for backward compatibility
-    orderNumber: {
-        type: String,
-        unique: true,
-        sparse: true, // Allows null values but enforces uniqueness when present
-        trim: true
-    },
     client: {
         userId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -214,11 +207,12 @@ const OrderSchema = new mongoose.Schema({
             trim: true
         }
     },
+    // FIXED: Made remise fields optional without default null values
     remise: {
         type: {
             type: String,
             enum: ['pourcentage', 'montant'],
-            default: null
+            // REMOVED: default: null (this was causing the error)
         },
         valeur: {
             type: Number,
@@ -237,7 +231,6 @@ const OrderSchema = new mongoose.Schema({
 
 // Index pour les recherches fréquentes
 OrderSchema.index({ numeroCommande: 1 });
-OrderSchema.index({ orderNumber: 1 }, { sparse: true }); // FIXED: sparse index for orderNumber
 OrderSchema.index({ 'client.email': 1 });
 OrderSchema.index({ 'client.userId': 1 });
 OrderSchema.index({ statut: 1 });
@@ -259,18 +252,6 @@ OrderSchema.virtual('peutEtreAnnulee').get(function() {
     return ['en-attente', 'confirmée'].includes(this.statut);
 });
 
-// CRITICAL FIX: Pre-save middleware to sync numeroCommande and orderNumber
-OrderSchema.pre('save', function(next) {
-    // Ensure orderNumber matches numeroCommande
-    if (this.numeroCommande && !this.orderNumber) {
-        this.orderNumber = this.numeroCommande;
-    }
-    if (this.orderNumber && !this.numeroCommande) {
-        this.numeroCommande = this.orderNumber;
-    }
-    next();
-});
-
 // Pre-save middleware pour calculer automatiquement les totaux
 OrderSchema.pre('save', function(next) {
     // Calculer le sous-total si ce n'est pas déjà fait
@@ -283,7 +264,7 @@ OrderSchema.pre('save', function(next) {
         this.total = this.sousTotal + (this.fraisLivraison || 0);
         
         // Appliquer la remise si applicable
-        if (this.remise && this.remise.valeur > 0) {
+        if (this.remise && this.remise.type && this.remise.valeur > 0) {
             if (this.remise.type === 'pourcentage') {
                 const reduction = this.sousTotal * (this.remise.valeur / 100);
                 this.total = Math.max(0, this.total - reduction);
@@ -307,7 +288,7 @@ OrderSchema.pre('save', function(next) {
         this.historiqueStatut.push({
             statut: this.statut,
             date: new Date(),
-            modifiePar: null,
+            modifiePar: null, // Sera défini par le contrôleur si nécessaire
             commentaire: `Statut changé vers: ${this.statut}`
         });
         
@@ -321,7 +302,7 @@ OrderSchema.pre('save', function(next) {
                 break;
             case 'livrée':
                 this.dateLivraison = new Date();
-                this.statutPaiement = 'payé';
+                this.statutPaiement = 'payé'; // Automatiquement payé à la livraison
                 break;
         }
     }
@@ -334,6 +315,7 @@ OrderSchema.methods.changerStatut = function(nouveauStatut, utilisateur = null, 
     const anciensStatut = this.statut;
     this.statut = nouveauStatut;
     
+    // L'historique sera géré par le pre-save hook
     if (commentaire) {
         this.historiqueStatut[this.historiqueStatut.length - 1].commentaire = commentaire;
     }
@@ -351,7 +333,8 @@ OrderSchema.methods.calculerTotal = function() {
     
     this.total = this.sousTotal + (this.fraisLivraison || 0);
     
-    if (this.remise && this.remise.valeur > 0) {
+    // Appliquer la remise
+    if (this.remise && this.remise.type && this.remise.valeur > 0) {
         if (this.remise.type === 'pourcentage') {
             const reduction = this.sousTotal * (this.remise.valeur / 100);
             this.total = Math.max(0, this.total - reduction);
@@ -366,8 +349,8 @@ OrderSchema.methods.calculerTotal = function() {
 // Méthodes statiques
 OrderSchema.statics.genererNumeroCommande = function() {
     const timestamp = Date.now().toString();
-    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-    return `CMD${timestamp}${random}`;
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `CMD${timestamp.slice(-8)}${random}`;
 };
 
 OrderSchema.statics.getStatistiquesParPeriode = function(dateDebut, dateFin) {

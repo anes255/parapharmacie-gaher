@@ -7,6 +7,13 @@ const OrderSchema = new mongoose.Schema({
         unique: true,
         trim: true
     },
+    // CRITICAL FIX: Add orderNumber as alias for backward compatibility
+    orderNumber: {
+        type: String,
+        unique: true,
+        sparse: true, // Allows null values but enforces uniqueness when present
+        trim: true
+    },
     client: {
         userId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -15,42 +22,50 @@ const OrderSchema = new mongoose.Schema({
         },
         prenom: {
             type: String,
-            required: [true, 'Le prénom du client est requis'],
+            required: true,
             trim: true
         },
         nom: {
             type: String,
-            required: [true, 'Le nom du client est requis'],
+            required: true,
             trim: true
         },
         email: {
             type: String,
-            required: [true, 'L\'email du client est requis'],
+            required: true,
             lowercase: true,
             trim: true,
             match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Format d\'email invalide']
         },
         telephone: {
             type: String,
-            required: [true, 'Le téléphone du client est requis'],
+            required: true,
             trim: true
         },
         adresse: {
             type: String,
-            required: [true, 'L\'adresse du client est requise'],
-            trim: true,
-            minlength: [10, 'L\'adresse doit contenir au moins 10 caractères']
+            required: true,
+            trim: true
+        },
+        ville: {
+            type: String,
+            default: '',
+            trim: true
         },
         wilaya: {
             type: String,
-            required: [true, 'La wilaya est requise'],
+            required: true,
+            trim: true
+        },
+        codePostal: {
+            type: String,
+            default: '',
             trim: true
         }
     },
     articles: [{
         productId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Product',
+            type: String,
             required: true
         },
         nom: {
@@ -61,73 +76,101 @@ const OrderSchema = new mongoose.Schema({
         prix: {
             type: Number,
             required: true,
-            min: [0, 'Le prix ne peut pas être négatif']
+            min: 0
         },
         quantite: {
             type: Number,
             required: true,
-            min: [1, 'La quantité doit être au moins 1']
+            min: 1
         },
         image: {
             type: String,
             default: ''
+        },
+        sousTotal: {
+            type: Number,
+            default: function() {
+                return this.prix * this.quantite;
+            }
         }
     }],
     sousTotal: {
         type: Number,
         required: true,
-        min: [0, 'Le sous-total ne peut pas être négatif']
+        min: 0,
+        default: 0
     },
     fraisLivraison: {
         type: Number,
-        required: true,
-        min: [0, 'Les frais de livraison ne peuvent pas être négatifs'],
-        default: 0
+        default: 0,
+        min: 0
     },
     total: {
         type: Number,
         required: true,
-        min: [0, 'Le total ne peut pas être négatif']
+        min: 0,
+        default: 0
     },
     statut: {
         type: String,
-        required: true,
-        enum: {
-            values: ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'],
-            message: '{VALUE} n\'est pas un statut valide'
-        },
+        enum: [
+            'en-attente',
+            'confirmée', 
+            'préparée',
+            'expédiée',
+            'livrée',
+            'annulée'
+        ],
         default: 'en-attente'
     },
     modePaiement: {
         type: String,
-        required: true,
-        enum: {
-            values: ['Paiement à la livraison', 'Carte bancaire', 'Virement bancaire'],
-            message: '{VALUE} n\'est pas un mode de paiement valide'
-        },
+        enum: [
+            'Paiement à la livraison',
+            'Carte bancaire',
+            'Virement bancaire',
+            'PayPal'
+        ],
         default: 'Paiement à la livraison'
     },
-    commentaires: {
+    statutPaiement: {
         type: String,
-        default: '',
-        maxlength: [500, 'Les commentaires ne peuvent pas dépasser 500 caractères']
+        enum: [
+            'en-attente',
+            'payé',
+            'échec',
+            'remboursé'
+        ],
+        default: 'en-attente'
     },
     dateCommande: {
         type: Date,
-        required: true,
-        default: Date.now
+        default: Date.now,
+        required: true
+    },
+    dateConfirmation: {
+        type: Date,
+        default: null
+    },
+    dateExpedition: {
+        type: Date,
+        default: null
     },
     dateLivraison: {
         type: Date,
         default: null
     },
-    dateAnnulation: {
-        type: Date,
-        default: null
-    },
-    raisonAnnulation: {
+    commentaires: {
         type: String,
-        default: ''
+        default: '',
+        trim: true,
+        maxlength: 500
+    },
+    notesAdmin: {
+        type: String,
+        default: '',
+        trim: true,
+        maxlength: 1000
     },
     historiqueStatut: [{
         statut: {
@@ -136,206 +179,219 @@ const OrderSchema = new mongoose.Schema({
         },
         date: {
             type: Date,
-            required: true,
             default: Date.now
+        },
+        modifiePar: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
         },
         commentaire: {
             type: String,
-            default: ''
+            default: '',
+            maxlength: 200
         }
     }],
-    tracking: {
-        numeroSuivi: {
-            type: String,
-            default: ''
-        },
+    informationsLivraison: {
         transporteur: {
             type: String,
-            default: ''
+            default: '',
+            trim: true
+        },
+        numeroSuivi: {
+            type: String,
+            default: '',
+            trim: true
+        },
+        fraisLivraisonReel: {
+            type: Number,
+            default: null,
+            min: 0
+        },
+        delaiEstime: {
+            type: String,
+            default: '',
+            trim: true
         }
     },
-    notes: {
-        type: String,
-        default: ''
-    },
-    actif: {
-        type: Boolean,
-        default: true
+    remise: {
+        type: {
+            type: String,
+            enum: ['pourcentage', 'montant'],
+            default: null
+        },
+        valeur: {
+            type: Number,
+            default: 0,
+            min: 0
+        },
+        codePromo: {
+            type: String,
+            default: '',
+            trim: true
+        }
     }
 }, {
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    timestamps: true
 });
 
-// Index pour améliorer les performances
+// Index pour les recherches fréquentes
 OrderSchema.index({ numeroCommande: 1 });
+OrderSchema.index({ orderNumber: 1 }, { sparse: true }); // FIXED: sparse index for orderNumber
 OrderSchema.index({ 'client.email': 1 });
 OrderSchema.index({ 'client.userId': 1 });
 OrderSchema.index({ statut: 1 });
 OrderSchema.index({ dateCommande: -1 });
-OrderSchema.index({ dateLivraison: 1 });
+OrderSchema.index({ 'client.telephone': 1 });
 
 // Virtual pour calculer le nombre total d'articles
 OrderSchema.virtual('totalArticles').get(function() {
     return this.articles.reduce((total, article) => total + article.quantite, 0);
 });
 
-// Virtual pour le nom complet du client
-OrderSchema.virtual('client.nomComplet').get(function() {
-    return `${this.client.prenom} ${this.client.nom}`;
+// Virtual pour vérifier si la commande est modifiable
+OrderSchema.virtual('estModifiable').get(function() {
+    return ['en-attente', 'confirmée'].includes(this.statut);
 });
 
-// Middleware pour ajouter l'historique de statut lors des modifications
+// Virtual pour vérifier si la commande peut être annulée
+OrderSchema.virtual('peutEtreAnnulee').get(function() {
+    return ['en-attente', 'confirmée'].includes(this.statut);
+});
+
+// CRITICAL FIX: Pre-save middleware to sync numeroCommande and orderNumber
 OrderSchema.pre('save', function(next) {
-    if (this.isModified('statut') && !this.isNew) {
-        this.historiqueStatut.push({
-            statut: this.statut,
-            date: new Date(),
-            commentaire: `Statut changé vers: ${this.statut}`
-        });
-        
-        // Mettre à jour les dates selon le statut
-        if (this.statut === 'livrée' && !this.dateLivraison) {
-            this.dateLivraison = new Date();
-        } else if (this.statut === 'annulée' && !this.dateAnnulation) {
-            this.dateAnnulation = new Date();
-        }
+    // Ensure orderNumber matches numeroCommande
+    if (this.numeroCommande && !this.orderNumber) {
+        this.orderNumber = this.numeroCommande;
     }
-    
-    // Ajouter l'historique initial pour une nouvelle commande
-    if (this.isNew) {
-        this.historiqueStatut.push({
-            statut: this.statut,
-            date: this.dateCommande,
-            commentaire: 'Commande créée'
-        });
+    if (this.orderNumber && !this.numeroCommande) {
+        this.numeroCommande = this.orderNumber;
+    }
+    next();
+});
+
+// Pre-save middleware pour calculer automatiquement les totaux
+OrderSchema.pre('save', function(next) {
+    // Calculer le sous-total si ce n'est pas déjà fait
+    if (this.articles && this.articles.length > 0) {
+        this.sousTotal = this.articles.reduce((total, article) => {
+            return total + (article.prix * article.quantite);
+        }, 0);
+        
+        // Calculer le total
+        this.total = this.sousTotal + (this.fraisLivraison || 0);
+        
+        // Appliquer la remise si applicable
+        if (this.remise && this.remise.valeur > 0) {
+            if (this.remise.type === 'pourcentage') {
+                const reduction = this.sousTotal * (this.remise.valeur / 100);
+                this.total = Math.max(0, this.total - reduction);
+            } else if (this.remise.type === 'montant') {
+                this.total = Math.max(0, this.total - this.remise.valeur);
+            }
+        }
+        
+        // Arrondir à 2 décimales
+        this.sousTotal = Math.round(this.sousTotal * 100) / 100;
+        this.total = Math.round(this.total * 100) / 100;
     }
     
     next();
 });
 
-// Méthode pour changer le statut avec commentaire
-OrderSchema.methods.changerStatut = function(nouveauStatut, commentaire = '') {
-    const statutsValides = ['en-attente', 'confirmée', 'préparée', 'expédiée', 'livrée', 'annulée'];
-    
-    if (!statutsValides.includes(nouveauStatut)) {
-        throw new Error('Statut invalide');
+// Pre-save middleware pour gérer l'historique des statuts
+OrderSchema.pre('save', function(next) {
+    if (this.isModified('statut')) {
+        // Ajouter à l'historique
+        this.historiqueStatut.push({
+            statut: this.statut,
+            date: new Date(),
+            modifiePar: null,
+            commentaire: `Statut changé vers: ${this.statut}`
+        });
+        
+        // Mettre à jour les dates automatiquement
+        switch (this.statut) {
+            case 'confirmée':
+                this.dateConfirmation = new Date();
+                break;
+            case 'expédiée':
+                this.dateExpedition = new Date();
+                break;
+            case 'livrée':
+                this.dateLivraison = new Date();
+                this.statutPaiement = 'payé';
+                break;
+        }
     }
     
+    next();
+});
+
+// Méthodes d'instance
+OrderSchema.methods.changerStatut = function(nouveauStatut, utilisateur = null, commentaire = '') {
+    const anciensStatut = this.statut;
     this.statut = nouveauStatut;
     
-    // Ajouter à l'historique
-    this.historiqueStatut.push({
-        statut: nouveauStatut,
-        date: new Date(),
-        commentaire: commentaire || `Statut changé vers: ${nouveauStatut}`
-    });
-    
-    // Mettre à jour les dates
-    if (nouveauStatut === 'livrée') {
-        this.dateLivraison = new Date();
-    } else if (nouveauStatut === 'annulée') {
-        this.dateAnnulation = new Date();
-        this.raisonAnnulation = commentaire;
+    if (commentaire) {
+        this.historiqueStatut[this.historiqueStatut.length - 1].commentaire = commentaire;
+    }
+    if (utilisateur) {
+        this.historiqueStatut[this.historiqueStatut.length - 1].modifiePar = utilisateur;
     }
     
     return this.save();
 };
 
-// Méthode pour calculer les délais
-OrderSchema.methods.calculerDelais = function() {
-    const maintenant = new Date();
-    const delaiDepuisCommande = Math.floor((maintenant - this.dateCommande) / (1000 * 60 * 60 * 24));
+OrderSchema.methods.calculerTotal = function() {
+    this.sousTotal = this.articles.reduce((total, article) => {
+        return total + (article.prix * article.quantite);
+    }, 0);
     
-    let delaiLivraison = null;
-    if (this.dateLivraison) {
-        delaiLivraison = Math.floor((this.dateLivraison - this.dateCommande) / (1000 * 60 * 60 * 24));
+    this.total = this.sousTotal + (this.fraisLivraison || 0);
+    
+    if (this.remise && this.remise.valeur > 0) {
+        if (this.remise.type === 'pourcentage') {
+            const reduction = this.sousTotal * (this.remise.valeur / 100);
+            this.total = Math.max(0, this.total - reduction);
+        } else if (this.remise.type === 'montant') {
+            this.total = Math.max(0, this.total - this.remise.valeur);
+        }
     }
     
-    return {
-        delaiDepuisCommande,
-        delaiLivraison,
-        enRetard: delaiDepuisCommande > 7 && this.statut !== 'livrée' && this.statut !== 'annulée'
-    };
+    return this.total;
 };
 
-// Méthode statique pour obtenir les statistiques
-OrderSchema.statics.obtenirStatistiques = async function(periode = 30) {
-    const dateDebut = new Date();
-    dateDebut.setDate(dateDebut.getDate() - periode);
-    
-    const pipeline = [
+// Méthodes statiques
+OrderSchema.statics.genererNumeroCommande = function() {
+    const timestamp = Date.now().toString();
+    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    return `CMD${timestamp}${random}`;
+};
+
+OrderSchema.statics.getStatistiquesParPeriode = function(dateDebut, dateFin) {
+    return this.aggregate([
         {
             $match: {
-                dateCommande: { $gte: dateDebut },
-                actif: true
+                dateCommande: {
+                    $gte: dateDebut,
+                    $lte: dateFin
+                }
             }
         },
         {
             $group: {
-                _id: null,
-                totalCommandes: { $sum: 1 },
-                chiffreAffaires: { $sum: '$total' },
-                panierMoyen: { $avg: '$total' },
-                commandesEnAttente: {
-                    $sum: { $cond: [{ $eq: ['$statut', 'en-attente'] }, 1, 0] }
-                },
-                commandesLivrees: {
-                    $sum: { $cond: [{ $eq: ['$statut', 'livrée'] }, 1, 0] }
-                }
+                _id: '$statut',
+                count: { $sum: 1 },
+                totalMontant: { $sum: '$total' }
             }
         }
-    ];
-    
-    const result = await this.aggregate(pipeline);
-    return result[0] || {
-        totalCommandes: 0,
-        chiffreAffaires: 0,
-        panierMoyen: 0,
-        commandesEnAttente: 0,
-        commandesLivrees: 0
-    };
+    ]);
 };
 
-// Méthode statique pour rechercher des commandes
-OrderSchema.statics.rechercher = function(criteres = {}) {
-    let query = this.find({ actif: true });
-    
-    // Recherche par numéro de commande
-    if (criteres.numeroCommande) {
-        query = query.where('numeroCommande').regex(new RegExp(criteres.numeroCommande, 'i'));
-    }
-    
-    // Recherche par email client
-    if (criteres.emailClient) {
-        query = query.where('client.email').regex(new RegExp(criteres.emailClient, 'i'));
-    }
-    
-    // Filtrage par statut
-    if (criteres.statut) {
-        query = query.where('statut').equals(criteres.statut);
-    }
-    
-    // Filtrage par période
-    if (criteres.dateDebut) {
-        query = query.where('dateCommande').gte(criteres.dateDebut);
-    }
-    
-    if (criteres.dateFin) {
-        query = query.where('dateCommande').lte(criteres.dateFin);
-    }
-    
-    // Filtrage par montant
-    if (criteres.montantMin) {
-        query = query.where('total').gte(criteres.montantMin);
-    }
-    
-    if (criteres.montantMax) {
-        query = query.where('total').lte(criteres.montantMax);
-    }
-    
-    return query.sort({ dateCommande: -1 });
-};
+// Assurer que les virtuals sont inclus lors de la sérialisation
+OrderSchema.set('toJSON', { virtuals: true });
+OrderSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Order', OrderSchema);

@@ -145,6 +145,69 @@ router.post('/', async (req, res) => {
     }
 });
 
+// @route   GET /api/orders/stats/dashboard
+// @desc    Get order statistics for admin dashboard
+// @access  Private/Admin
+router.get('/stats/dashboard', auth, async (req, res) => {
+    try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                message: 'Accès administrateur requis'
+            });
+        }
+        
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        
+        const totalOrders = await Order.countDocuments();
+        const pendingOrders = await Order.countDocuments({ statut: 'en-attente' });
+        const monthlyOrders = await Order.countDocuments({ 
+            dateCommande: { $gte: startOfMonth } 
+        });
+        
+        const monthlyRevenue = await Order.aggregate([
+            {
+                $match: {
+                    dateCommande: { $gte: startOfMonth },
+                    statut: { $in: ['confirmée', 'préparée', 'expédiée', 'livrée'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$total' }
+                }
+            }
+        ]);
+        
+        const ordersByStatus = await Order.aggregate([
+            {
+                $group: {
+                    _id: '$statut',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        
+        res.json({
+            totalOrders,
+            pendingOrders,
+            monthlyOrders,
+            monthlyRevenue: monthlyRevenue[0]?.total || 0,
+            ordersByStatus: ordersByStatus.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {})
+        });
+        
+    } catch (error) {
+        console.error('❌ Get order stats error:', error);
+        res.status(500).json({
+            message: 'Erreur lors de la récupération des statistiques'
+        });
+    }
+});
+
 // @route   GET /api/orders/user/all
 // @desc    Get user orders
 // @access  Private

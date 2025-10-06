@@ -72,34 +72,34 @@ app.get('/api/health', (req, res) => {
 // API ROUTES - LOAD ALL ROUTES HERE
 // ========================================
 
-console.log('📦 Loading API routes...');
+console.log('Loading API routes...');
 
 // Auth routes
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
-console.log('✅ Auth routes: /api/auth');
+console.log('Auth routes: /api/auth');
 
 // Product routes  
 const productRoutes = require('./routes/products');
 app.use('/api/products', productRoutes);
-console.log('✅ Product routes: /api/products');
+console.log('Product routes: /api/products');
 
 // Order routes
 const orderRoutes = require('./routes/orders');
 app.use('/api/orders', orderRoutes);
-console.log('✅ Order routes: /api/orders');
+console.log('Order routes: /api/orders');
 
 // Admin routes
 const adminRoutes = require('./routes/admin');
 app.use('/api/admin', adminRoutes);
-console.log('✅ Admin routes: /api/admin');
+console.log('Admin routes: /api/admin');
 
 // Settings routes
 const settingsRoutes = require('./routes/settings');
 app.use('/api/settings', settingsRoutes);
-console.log('✅ Settings routes: /api/settings');
+console.log('Settings routes: /api/settings');
 
-console.log('✅ All routes loaded successfully\n');
+console.log('All routes loaded successfully\n');
 
 // ========================================
 // ERROR HANDLING - MUST BE AFTER ROUTES
@@ -107,7 +107,7 @@ console.log('✅ All routes loaded successfully\n');
 
 // 404 handler - MUST be last
 app.use((req, res) => {
-    console.log('⚠️ 404:', req.method, req.path);
+    console.log('404:', req.method, req.path);
     res.status(404).json({
         message: 'Route not found',
         path: req.path,
@@ -118,12 +118,116 @@ app.use((req, res) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-    console.error('❌ Error:', err);
+    console.error('Error:', err);
     res.status(err.status || 500).json({
         message: err.message || 'Internal server error',
         timestamp: new Date().toISOString()
     });
 });
+
+// ========================================
+// DATABASE MAINTENANCE FUNCTIONS
+// ========================================
+
+// CRITICAL: Fix MongoDB orderNumber index issue
+async function fixOrderNumberIndex() {
+    try {
+        console.log('Checking orderNumber index...');
+        
+        const collection = mongoose.connection.db.collection('orders');
+        
+        // Get existing indices
+        const indices = await collection.indexes();
+        const hasOldIndex = indices.some(idx => 
+            idx.name === 'orderNumber_1' && !idx.sparse
+        );
+        
+        if (hasOldIndex) {
+            console.log('Found old orderNumber index, fixing...');
+            
+            // Drop old index
+            try {
+                await collection.dropIndex('orderNumber_1');
+                console.log('Old orderNumber_1 index dropped');
+            } catch (err) {
+                if (err.code !== 27) { // 27 = IndexNotFound
+                    throw err;
+                }
+            }
+            
+            // Create new sparse index (will be created automatically by model)
+            console.log('New sparse index will be created by model');
+        }
+        
+        // Sync existing orders: set orderNumber = numeroCommande where orderNumber is null
+        const updateResult = await collection.updateMany(
+            { 
+                numeroCommande: { $exists: true, $ne: null },
+                $or: [
+                    { orderNumber: null },
+                    { orderNumber: { $exists: false } }
+                ]
+            },
+            [{ $set: { orderNumber: "$numeroCommande" } }]
+        );
+        
+        if (updateResult.modifiedCount > 0) {
+            console.log(`Synced orderNumber for ${updateResult.modifiedCount} orders`);
+        }
+        
+        console.log('OrderNumber index check complete');
+        
+    } catch (error) {
+        console.error('Error fixing orderNumber index:', error.message);
+        // Don't throw - allow server to continue even if fix fails
+    }
+}
+
+// Create admin user
+async function createAdminUser() {
+    try {
+        const User = require('./models/User');
+        
+        const admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
+        
+        if (!admin) {
+            console.log('Creating admin user...');
+            
+            const bcrypt = require('bcryptjs');
+            const salt = await bcrypt.genSalt(12);
+            const hashedPassword = await bcrypt.hash('anesaya75', salt);
+            
+            const newAdmin = new User({
+                nom: 'Gaher',
+                prenom: 'Parapharmacie',
+                email: 'pharmaciegaher@gmail.com',
+                password: hashedPassword,
+                telephone: '0555123456',
+                adresse: 'Tipaza, Algérie',
+                wilaya: 'Tipaza',
+                role: 'admin',
+                actif: true
+            });
+            
+            await newAdmin.save();
+            console.log('Admin user created');
+            console.log('   Email: pharmaciegaher@gmail.com');
+            console.log('   Password: anesaya75');
+        } else {
+            console.log('Admin user exists');
+            
+            // Fix admin phone if it's wrong
+            if (admin.telephone === '+213123456789') {
+                console.log('Fixing admin phone number...');
+                admin.telephone = '0555123456';
+                await admin.save({ validateBeforeSave: false });
+                console.log('Admin phone fixed');
+            }
+        }
+    } catch (error) {
+        console.error('Admin user creation error:', error.message);
+    }
+}
 
 // ========================================
 // DATABASE CONNECTION
@@ -135,70 +239,40 @@ const connectDB = async () => {
             throw new Error('MONGODB_URI not found in environment variables');
         }
 
-        console.log('🔌 Connecting to MongoDB...');
+        console.log('Connecting to MongoDB...');
         
         await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true
         });
 
-        console.log('✅ MongoDB connected');
+        console.log('MongoDB connected');
         
-        // Create admin user
+        // Run maintenance tasks after connection
         await createAdminUser();
+        await fixOrderNumberIndex();
+        
+        console.log('Database initialization complete\n');
         
     } catch (error) {
-        console.error('❌ MongoDB connection failed:', error.message);
-        console.log('🔄 Retrying in 10 seconds...');
+        console.error('MongoDB connection failed:', error.message);
+        console.log('Retrying in 10 seconds...');
         setTimeout(connectDB, 10000);
     }
 };
 
-// Create admin user
-async function createAdminUser() {
-    try {
-        const User = require('./models/User');
-        
-        const admin = await User.findOne({ email: 'pharmaciegaher@gmail.com' });
-        
-        if (!admin) {
-            console.log('👤 Creating admin user...');
-            
-            const bcrypt = require('bcryptjs');
-            const salt = await bcrypt.genSalt(12);
-            const hashedPassword = await bcrypt.hash('anesaya75', salt);
-            
-            const newAdmin = new User({
-                nom: 'Gaher',
-                prenom: 'Parapharmacie',
-                email: 'pharmaciegaher@gmail.com',
-                password: hashedPassword,
-                telephone: '0555123456', // FIXED: Valid Algerian format (10 digits starting with 0)
-                adresse: 'Tipaza, Algérie',
-                wilaya: 'Tipaza',
-                role: 'admin',
-                actif: true
-            });
-            
-            await newAdmin.save();
-            console.log('✅ Admin user created');
-            console.log('   📧 Email: pharmaciegaher@gmail.com');
-            console.log('   🔑 Password: anesaya75');
-        } else {
-            console.log('✅ Admin user exists');
-            
-            // Fix admin phone if it's wrong
-            if (admin.telephone === '+213123456789') {
-                console.log('🔧 Fixing admin phone number...');
-                admin.telephone = '0555123456';
-                await admin.save({ validateBeforeSave: false }); // Skip validation during fix
-                console.log('✅ Admin phone fixed');
-            }
-        }
-    } catch (error) {
-        console.error('⚠️ Admin user creation error:', error.message);
-    }
-}
+// Handle connection events
+mongoose.connection.on('error', (err) => {
+    console.error('MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('MongoDB disconnected');
+});
+
+mongoose.connection.on('reconnected', () => {
+    console.log('MongoDB reconnected');
+});
 
 // ========================================
 // START SERVER
@@ -212,7 +286,7 @@ connectDB();
 // Start server
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log('\n========================================');
-    console.log('🚀 Shifa Parapharmacie Backend');
+    console.log('Shifa Parapharmacie Backend');
     console.log('========================================');
     console.log(`Port: ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -221,18 +295,44 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('Shutting down gracefully...');
+const gracefulShutdown = () => {
+    console.log('\nShutting down gracefully...');
+    server.close(async () => {
+        console.log('HTTP server closed');
+        
+        try {
+            await mongoose.connection.close();
+            console.log('MongoDB connection closed');
+            process.exit(0);
+        } catch (err) {
+            console.error('Error during shutdown:', err);
+            process.exit(1);
+        }
+    });
+    
+    // Force close after 10 seconds
+    setTimeout(() => {
+        console.error('Forcing shutdown...');
+        process.exit(1);
+    }, 10000);
+};
+
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+    console.error('UNCAUGHT EXCEPTION! Shutting down...');
+    console.error(err.name, err.message);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (err) => {
+    console.error('UNHANDLED REJECTION! Shutting down...');
+    console.error(err.name, err.message);
     server.close(() => {
-        mongoose.connection.close();
-        process.exit(0);
+        process.exit(1);
     });
 });
 
-process.on('SIGINT', () => {
-    console.log('Shutting down gracefully...');
-    server.close(() => {
-        mongoose.connection.close();
-        process.exit(0);
-    });
-});
+module.exports = app; // Export for testing

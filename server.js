@@ -99,6 +99,15 @@ const settingsRoutes = require('./routes/settings');
 app.use('/api/settings', settingsRoutes);
 console.log('Settings routes: /api/settings');
 
+// SEO routes (sitemap and robots.txt) - NEW
+try {
+    const sitemapRoutes = require('./routes/sitemap');
+    app.use('/api', sitemapRoutes);
+    console.log('SEO routes: /api/sitemap.xml, /api/robots.txt');
+} catch (error) {
+    console.log('Sitemap routes not found (optional) - create routes/sitemap.js to enable SEO features');
+}
+
 console.log('All routes loaded successfully\n');
 
 // ========================================

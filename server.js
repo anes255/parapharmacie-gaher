@@ -108,6 +108,25 @@ app.get('/', (req, res) => {
     });
 });
 
+// API root endpoint
+app.get('/api', (req, res) => {
+    res.json({
+        message: 'Shifa Parapharmacie API',
+        status: 'running',
+        version: '1.0.0',
+        timestamp: new Date().toISOString(),
+        documentation: 'Visit / for full endpoint list',
+        endpoints: {
+            health: '/api/health',
+            auth: '/api/auth/*',
+            products: '/api/products/*',
+            orders: '/api/orders/*',
+            admin: '/api/admin/*',
+            settings: '/api/settings/*'
+        }
+    });
+});
+
 app.get('/api/health', (req, res) => {
     const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
     const healthStatus = {

@@ -67,6 +67,34 @@ app.use((req, res, next) => {
 });
 
 // ========================================
+// ⚡ ULTRA-FAST PING ENDPOINT (MUST BE FIRST)
+// ========================================
+
+// This endpoint responds in ~1ms - perfect for wake-up pings
+app.get('/api/ping', (req, res) => {
+    res.status(200).json({ 
+        status: 'ok', 
+        timestamp: Date.now(),
+        message: 'pong'
+    });
+});
+
+// Quick health endpoint that works before DB connection
+app.get('/api/health', (req, res) => {
+    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+    const healthStatus = {
+        status: dbStatus === 'connected' ? 'healthy' : 'initializing',
+        timestamp: new Date().toISOString(),
+        database: dbStatus,
+        environment: CONFIG.NODE_ENV,
+        uptime: process.uptime(),
+        memory: process.memoryUsage()
+    };
+    
+    res.json(healthStatus);
+});
+
+// ========================================
 // MODELS - LOAD ALL MODELS FIRST
 // ========================================
 
@@ -97,6 +125,7 @@ app.get('/', (req, res) => {
         version: '1.0.0',
         timestamp: new Date().toISOString(),
         endpoints: {
+            ping: '/api/ping',
             health: '/api/health',
             auth: '/api/auth',
             products: '/api/products',
@@ -117,6 +146,7 @@ app.get('/api', (req, res) => {
         timestamp: new Date().toISOString(),
         documentation: 'Visit / for full endpoint list',
         endpoints: {
+            ping: '/api/ping',
             health: '/api/health',
             auth: '/api/auth/*',
             products: '/api/products/*',
@@ -125,22 +155,6 @@ app.get('/api', (req, res) => {
             settings: '/api/settings/*'
         }
     });
-});
-
-app.get('/api/health', (req, res) => {
-    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-    const healthStatus = {
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        database: dbStatus,
-        environment: CONFIG.NODE_ENV,
-        uptime: process.uptime(),
-        memory: process.memoryUsage()
-    };
-    
-    console.log('🏥 Health check:', dbStatus);
-    
-    res.json(healthStatus);
 });
 
 // ========================================
@@ -219,6 +233,7 @@ app.use((req, res) => {
         method: req.method,
         timestamp: new Date().toISOString(),
         availableEndpoints: [
+            '/api/ping',
             '/api/health',
             '/api/auth',
             '/api/products',
@@ -446,23 +461,25 @@ mongoose.connection.on('close', () => {
 });
 
 // ========================================
-// START SERVER
+// ⚡ START SERVER IMMEDIATELY (OPTIMIZED)
 // ========================================
 
-// Connect to database first
-connectDB();
-
-// Start HTTP server
+// Start HTTP server FIRST - don't wait for database
 const server = app.listen(CONFIG.PORT, '0.0.0.0', () => {
     console.log('\n========================================');
     console.log('🌿 Shifa Parapharmacie Backend Server');
     console.log('========================================');
     console.log(`📍 Port: ${CONFIG.PORT}`);
     console.log(`🌍 Environment: ${CONFIG.NODE_ENV}`);
+    console.log(`⚡ Quick Ping: http://localhost:${CONFIG.PORT}/api/ping`);
     console.log(`🏥 Health Check: http://localhost:${CONFIG.PORT}/api/health`);
     console.log(`📚 API Docs: http://localhost:${CONFIG.PORT}/`);
     console.log('========================================\n');
-    console.log('✅ Server is running and ready to accept requests\n');
+    console.log('✅ Server is running and ready to accept requests');
+    console.log('⏳ Database connection in progress...\n');
+    
+    // Connect to database AFTER server starts (non-blocking)
+    connectDB();
 });
 
 // ========================================

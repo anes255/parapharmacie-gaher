@@ -1,16 +1,10 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
 const { pool } = require('../db');
 const { adminAuth } = require('../middleware');
-const { v4: uuidv4 } = require('uuid');
 const router = express.Router();
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname))
-});
-const upload = multer({ storage, limits: { fileSize: 2 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
 
 // Get all products (public)
 router.get('/', async (req, res) => {
@@ -59,7 +53,11 @@ router.get('/admin/all', adminAuth, async (req, res) => {
 router.post('/', adminAuth, upload.single('image'), async (req, res) => {
   try {
     const { name, category, brand, price, stock, description, is_promo, is_featured, is_active } = req.body;
-    const image = req.file ? `/uploads/${req.file.filename}` : null;
+    let image = null;
+    if (req.file) {
+      const base64 = req.file.buffer.toString('base64');
+      image = `data:${req.file.mimetype};base64,${base64}`;
+    }
     const result = await pool.query(
       `INSERT INTO products (name, category, brand, price, stock, description, image, is_promo, is_featured, is_active)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
@@ -78,7 +76,8 @@ router.put('/:id', adminAuth, upload.single('image'), async (req, res) => {
     const { name, category, brand, price, stock, description, is_promo, is_featured, is_active } = req.body;
     let query, params;
     if (req.file) {
-      const image = `/uploads/${req.file.filename}`;
+      const base64 = req.file.buffer.toString('base64');
+      const image = `data:${req.file.mimetype};base64,${base64}`;
       query = `UPDATE products SET name=$1, category=$2, brand=$3, price=$4, stock=$5, description=$6, image=$7, is_promo=$8, is_featured=$9, is_active=$10 WHERE id=$11 RETURNING *`;
       params = [name, category, brand, price, stock, description, image, is_promo === 'true', is_featured === 'true', is_active !== 'false', req.params.id];
     } else {

@@ -28,7 +28,7 @@ const initDB = async () => {
         price DECIMAL(10,2) NOT NULL,
         stock INTEGER NOT NULL DEFAULT 0,
         description TEXT,
-        image TEXT,
+        image TEXT DEFAULT NULL,
         is_promo BOOLEAN DEFAULT false,
         is_featured BOOLEAN DEFAULT false,
         is_active BOOLEAN DEFAULT true,
